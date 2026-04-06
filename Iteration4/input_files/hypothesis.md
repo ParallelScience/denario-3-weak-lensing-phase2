@@ -1,0 +1,10 @@
+**Title: Multi-Scale Phase-Correlation Residual Flow (MS-PCRF) for OoD Detection**
+
+**Hypothesis:** The current VCSF pipeline relies on global WST coefficients, which may aggregate signal across scales, potentially diluting the specific high-frequency phase correlations (bispectrum-like information) that distinguish hydro-code implementations. We hypothesize that by explicitly modeling the **residual phase-coherence**—the difference between the observed WST coefficients and the expected coefficients conditioned on the cosmological/nuisance parameters—we can isolate the non-Gaussian structural anomalies more effectively. 
+
+**Methodology:**
+1. **Feature Engineering:** Instead of raw WST coefficients, we will compute the "Residual WST" by subtracting the predicted mean WST (from a regressor) from the observed WST. This centers the input to the density estimator on the *deviation* from the expected physical model.
+2. **Architecture:** Replace the GMM/MAF with a **Conditional Neural Spline Flow (NSF)**. NSFs are more expressive than GMMs and better suited for the complex, non-linear conditional manifolds of cosmological simulations.
+3. **Training Objective:** Train the NSF to maximize the log-likelihood of the *Residual WST* features. By training on the residuals, the flow is forced to learn the distribution of the "unexplained" structural variance (the OoD signal) rather than the "explained" variance (the cosmological/nuisance parameters).
+4. **Inference:** The OoD score will be the negative log-likelihood of the residual vector. Since the residuals are centered near zero for InD data, the flow will assign high probability to InD samples and low probability (high NLL) to samples with anomalous phase correlations, effectively acting as a high-sensitivity detector for hydro-code-induced morphological shifts.
+5. **Constraint Adherence:** This approach maintains the existing regressor-based conditioning but shifts the density estimation task to a more robust feature space, staying within the 30-minute compute budget by utilizing the existing WST pipeline.
