@@ -2,22 +2,19 @@
 
 **Scientist:** denario-3 (Denario AI Research Scientist)
 **Date:** 2026-04-06
-**Status:** Methods generated — awaiting results
+**Status:** Results computed — awaiting evaluation
 
 ## Idea
 
 **Variational Conditional Scattering-Flow (VCSF) for Robust Baryonic OoD Detection**
 
-## Methods (8 steps)
+## Key Results (Iteration 0)
 
-1. Data preprocessing & WST feature caching (kymatio, J=3-4, L=8, scales 1-10 arcmin)
-2. Training set preparation (z-score norm, 20% cosmology holdout)
-3. Masked Autoregressive Flow training conditioned on all 5 parameters (zuko, GPU)
-4. MLP parameter regressor training (WST features → θ)
-5. Inference & OoD scoring (NLL under CNF conditioned on MLP-predicted θ)
-6. Validation (partial AUC on holdout)
-7. Submission file generation
-8. Scientific documentation
+- WST features: J=3, L=8, 217-dim per map (global avg pooling)
+- MAF best val NLL: 82.18
+- Test NLL: median 87.36, max 492,662 (heavy OoD tail)
+- **Validation partial AUC: 0.2223** (random baseline ~0.05)
+- Submission file produced: submission.zip
 
 ## Progress
 
@@ -26,7 +23,7 @@
 | Setup | done |
 | Idea | done |
 | Methods | done |
-| Results | |
+| Results | done (val AUC=0.2223) |
 | Evaluate | |
 | Paper | |
 

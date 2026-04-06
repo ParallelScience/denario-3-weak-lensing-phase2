@@ -1,0 +1,87 @@
+{
+    "sub_tasks": [
+        {
+            "bullet_points": [
+                "Apply the kymatio patch (sph_harm to sph_harm_y) if import fails.",
+                "Reconstruct 2D maps from flattened arrays using the survey mask, using mmap_mode='r' to stay within memory limits.",
+                "Implement a batch-processing pipeline (batch size 64) to add Gaussian noise to training maps, ensuring noise is zeroed out outside the survey mask.",
+                "Compute Wavelet Scattering Transform (WST) features (J=3, L=8) on GPU.",
+                "Apply global average pooling to obtain a 217-dimensional feature vector per map.",
+                "Save the resulting feature matrices for training and test sets to disk."
+            ],
+            "sub_task": "Data Preprocessing and WST Feature Extraction",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Load WST features and labels.",
+                "Compute Z-score normalization parameters (mean and std) from the training set and save them as separate arrays.",
+                "Apply normalization to both training and test feature sets.",
+                "Split the training data into training and validation sets (80/20 split by cosmology).",
+                "Save the normalized features and split indices to disk."
+            ],
+            "sub_task": "Training Set Preparation and Normalization",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Construct a Masked Autoregressive Flow (MAF) using zuko.flows.MAF.",
+                "Train the flow to learn the conditional density of WST features given the 5 parameters.",
+                "If training fails to converge or shows high sensitivity to nuisance parameters, fall back to conditioning only on the two cosmological parameters (Omega_m, S_8).",
+                "Use GPU acceleration, Adam optimizer, and early stopping based on validation set NLL.",
+                "Save the trained model weights."
+            ],
+            "sub_task": "Conditional Normalizing Flow (CNF) Training",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Train a 3-layer MLP to predict the 5 parameters from the WST features.",
+                "Use MSE loss and Adam optimizer on GPU.",
+                "Print the per-parameter prediction error (normalized RMSE) on the validation set for each of the 5 parameters.",
+                "Save the trained regressor model."
+            ],
+            "sub_task": "MLP Parameter Regressor Training",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Load the trained CNF and MLP regressor.",
+                "Predict the parameter vector theta_hat for each test map using the MLP.",
+                "Evaluate the NLL of test features under the CNF conditioned on theta_hat.",
+                "Generate and save a histogram/KDE plot of the NLL scores for the test set.",
+                "Save the NLL scores as the final OoD scores in the required submission format."
+            ],
+            "sub_task": "Inference and OoD Scoring",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Construct a synthetic OoD validation set using held-out cosmologies and a signal rescaling perturbation.",
+                "Compute the partial AUC score (FPR in [0.001, 0.05]) using the score_phase2 utility.",
+                "Generate and save a plot of the partial ROC curve (TPR vs. FPR on log scale).",
+                "Print the validation score and save all results for the researcher."
+            ],
+            "sub_task": "Validation and Performance Estimation",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Synthesize performance metrics (partial AUC) and interpret the effectiveness of the VCSF approach.",
+                "Discuss the role of WST features in capturing non-Gaussian baryonic signatures.",
+                "Analyze the robustness of the method to nuisance parameters, referencing the regressor RMSE results.",
+                "Reference all generated plots (NLL distribution, partial ROC curve) and quote all key numerical results (validation partial AUC, architecture details, regressor performance).",
+                "Write the final Results section for the scientific report."
+            ],
+            "sub_task": "Results Documentation and Scientific Reporting",
+            "sub_task_agent": "researcher",
+            "code_execution_timeout": 1800
+        }
+    ]
+}
