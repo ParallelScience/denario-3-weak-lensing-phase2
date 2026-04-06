@@ -1,0 +1,71 @@
+{
+    "sub_tasks": [
+        {
+            "bullet_points": [
+                "Load training maps using mmap_mode='r'.",
+                "Compute WST coefficients (J=4, L=8) using kymatio, averaging over 3 independent noise realizations per map to improve robustness.",
+                "Apply PCA to the WST coefficients, retaining components that explain at least 95% of the variance.",
+                "Compute the covariance of the reduced features with respect to nuisance parameters and apply a whitening transformation to minimize nuisance sensitivity.",
+                "Save the processed, whitened features and the PCA/whitening transformation parameters to disk."
+            ],
+            "sub_task": "Compute Wavelet Scattering Transform (WST) coefficients, reduce dimensionality via PCA, and apply nuisance-decorrelation whitening.",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Load the whitened WST features from Step 1.",
+                "Train a 3-4 layer MLP to map features to the 5-dimensional parameter space {Omega_m, S_8, T_AGN, f_0, Delta z}.",
+                "Configure the MLP to output both a mean prediction and a diagonal covariance estimate for the parameters.",
+                "Use a validation split to monitor performance and save the trained regressor model."
+            ],
+            "sub_task": "Train a lightweight MLP regressor to predict physical parameters and their uncertainty from whitened WST features.",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Use zuko to implement a Conditional Neural Spline Flow.",
+                "Train the flow to model p(WST_whitened | theta), conditioned on the 5 physical parameters.",
+                "Implement early stopping (patience=10 epochs) based on validation negative log-likelihood.",
+                "Save the trained flow model and a diagnostic plot of training/validation NLL curves."
+            ],
+            "sub_task": "Train a Conditional Neural Spline Flow (NSF) with early stopping and diagnostic monitoring.",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Construct \"Structural OoD\" proxy samples by applying a Gaussian blur (sigma=1-2 pixels) to held-out InD maps.",
+                "Calculate the partial AUC score using the trained flow and regressor.",
+                "Generate diagnostic plots (ROC curves, score distributions) to assess performance.",
+                "Save the validation results and plots."
+            ],
+            "sub_task": "Evaluate the model on a validation set including \"Structural OoD\" proxy samples.",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Load test maps and compute their WST features using the same pipeline as Step 1.",
+                "For each test map, initialize theta with the regressor and perform gradient descent on the log-likelihood.",
+                "Implement a fallback: if gradient descent NLL is worse than the initial NLL, revert to the regressor-predicted theta.",
+                "Generate the submission.zip file, ensuring it is written even if partial failures occur (using a try-except block)."
+            ],
+            "sub_task": "Compute OoD scores for the test set using gradient-based likelihood optimization with a fallback strategy.",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Analyze partial AUC scores and the effectiveness of the VCSF approach.",
+                "Quantitatively compare the VCSF method against the power spectrum chi^2, CNN parameter estimation chi^2, and autoencoder reconstruction error baselines.",
+                "Discuss how the model marginalizes nuisance parameters while detecting structural anomalies at baryonic feedback scales.",
+                "Draft the Results section, summarizing methodology, performance, and scientific implications."
+            ],
+            "sub_task": "Synthesize findings, compare against baselines, and write the Results section.",
+            "sub_task_agent": "researcher",
+            "code_execution_timeout": 1800
+        }
+    ]
+}
