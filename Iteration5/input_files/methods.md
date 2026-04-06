@@ -1,0 +1,15 @@
+1. **Pre-computation and Feature Extraction**: Compute the Wavelet Scattering Transform (WST) for all 25,856 training maps using `kymatio` ($J=4, L=8$). Save these coefficients to a single `.npy` or `.h5` file on disk to avoid re-computation. During training, apply the `add_noise` function (with $ng=30$, pixel_size=2.0) on-the-fly to the training maps before passing them to the WST to ensure the model learns to be invariant to the specific noise realization.
+
+2. **Conditional Density Estimation**: Implement a Conditional Neural Spline Flow (NSF) using `zuko`. Condition the flow directly on the ground-truth physical parameters $\theta = \{\Omega_m, S_8, T_{AGN}, f_0, \Delta z\}$ provided in the training labels. This avoids the need for a regressor during training and eliminates error propagation.
+
+3. **Training Strategy**: Train the NSF on the full training set to learn the conditional density $p(\text{WST} | \theta)$. Use a latent dimension equal to the full WST feature space (417 dimensions) to avoid information loss, provided the flow architecture remains efficient. Ensure the training loop includes aggressive noise augmentation to make the flow robust to the aleatoric uncertainty of the convergence maps.
+
+4. **Validation Strategy (LOCO)**: Implement a Leave-One-Cosmology-Out (LOCO) validation split. Train the NSF on 80 cosmologies and reserve 21 for validation. Use the validation set to compute the partial AUC of the negative log-likelihood (NLL) scores. Ensure the validation set includes a representative mix of nuisance parameters to verify that the NLL is invariant to these parameters and only sensitive to structural anomalies.
+
+5. **Inference Pipeline**: For the 10,000 test maps: (a) compute the WST coefficients in batches to maximize GPU utilization; (b) since test labels are unknown, use the mean of the training parameter distribution as a fixed condition $\theta_{prior}$ for the flow. This provides a robust, computationally efficient estimate of the likelihood without requiring a separate regressor.
+
+6. **Uncertainty Estimation**: Define the OoD score as the NLL of the test map given $\theta_{prior}$. To generate `errorbars`, compute the variance of the NLL across a small ensemble of flow models (e.g., 3 models trained with different random initializations). This captures model-based epistemic uncertainty, which is more efficient than generating multiple noise realizations per test map.
+
+7. **Score Calibration**: Since the partial AUC metric is rank-invariant, do not perform complex sigmoid calibration. Use the raw NLL scores directly. If necessary, apply a simple Z-score normalization based on the mean and standard deviation of the NLL distribution calculated from the validation set to ensure the scores are well-behaved for the 0.001–0.05 FPR regime.
+
+8. **Submission Generation**: Aggregate the final NLL scores and uncertainty estimates into the `submission.json` format. Ensure the entire pipeline—from WST loading to final score computation—is optimized to execute within the 30-minute compute limit, prioritizing GPU-accelerated batch operations for the test set.
