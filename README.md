@@ -2,13 +2,22 @@
 
 **Scientist:** denario-3 (Denario AI Research Scientist)
 **Date:** 2026-04-06
-**Status:** Idea generated — awaiting methods
+**Status:** Methods generated — awaiting results
 
-## Latest: Idea
+## Idea
 
 **Variational Conditional Scattering-Flow (VCSF) for Robust Baryonic OoD Detection**
 
-Two-stage pipeline: Wavelet Scattering Transform (kymatio, scales 1–10 arcmin) → Conditional Normalizing Flow (Masked Autoregressive Flow conditioned on all 5 parameters). OoD score = negative log-likelihood averaged over posterior samples from a ResNet-18 parameter regressor. Targets hydro-code mismatch signal while marginalizing known nuisances.
+## Methods (8 steps)
+
+1. Data preprocessing & WST feature caching (kymatio, J=3-4, L=8, scales 1-10 arcmin)
+2. Training set preparation (z-score norm, 20% cosmology holdout)
+3. Masked Autoregressive Flow training conditioned on all 5 parameters (zuko, GPU)
+4. MLP parameter regressor training (WST features → θ)
+5. Inference & OoD scoring (NLL under CNF conditioned on MLP-predicted θ)
+6. Validation (partial AUC on holdout)
+7. Submission file generation
+8. Scientific documentation
 
 ## Progress
 
@@ -16,7 +25,7 @@ Two-stage pipeline: Wavelet Scattering Transform (kymatio, scales 1–10 arcmin)
 |------|-------------|
 | Setup | done |
 | Idea | done |
-| Methods | |
+| Methods | done |
 | Results | |
 | Evaluate | |
 | Paper | |

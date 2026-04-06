@@ -1,0 +1,15 @@
+1. **Data Preprocessing and Feature Caching**: Reconstruct 2D maps from flattened arrays using the provided mask. Implement a pipeline to apply dynamic noise injection (matching the test set noise level $\sigma \approx 0.02582$) to the training maps. Pre-compute the Wavelet Scattering Transform (WST) features for all 25,856 training maps using `kymatio` (scales 1–10 arcmin, J=3 or 4, L=8). Save these features to disk (e.g., using `numpy` memmap) to ensure they are ready for the training phase without redundant computation.
+
+2. **Training Set Preparation**: Standardize the WST features (z-score normalization) using the mean and standard deviation calculated across the entire training set. Split the data into training and validation sets by holding out 20% of the cosmological models (e.g., 20 out of 101) to ensure the model generalizes to unseen parameter space.
+
+3. **Conditional Normalizing Flow (CNF) Training**: Construct a Masked Autoregressive Flow (MAF) using `zuko`. Train the CNF to learn the conditional density $p(\text{features} | \Omega_m, S_8, T_{AGN}, f_0, \Delta z)$ using the ground-truth labels provided in `label.npy`. Use the 15-minute training budget to optimize the flow parameters, utilizing the GPU for all tensor operations. Implement early stopping based on the held-out validation set to prevent overfitting.
+
+4. **Parameter Estimator Training**: Train a lightweight Multi-Layer Perceptron (MLP) regressor to predict the five parameters ($\Omega_m, S_8, T_{AGN}, f_0, \Delta z$) from the WST features. This regressor will be used at inference time to provide the conditioning vector $\theta$ for the test maps, as ground-truth labels are unavailable for the test set.
+
+5. **Inference and OoD Scoring**: For each of the 10,000 test maps, compute the WST features and pass them through the pre-trained MLP regressor to obtain a point estimate $\hat{\theta}$. Calculate the negative log-likelihood (NLL) of the test features under the CNF conditioned on $\hat{\theta}$. The resulting NLL serves as the OoD score.
+
+6. **Validation and Performance Estimation**: Evaluate the model using the `score_phase2` function on the held-out validation set. Calculate the partial AUC in the low-FPR regime (0.001 to 0.05). If the score is insufficient, refine the CNF architecture (e.g., adjust the number of coupling layers) or the WST configuration within the remaining compute budget.
+
+7. **Submission Generation**: Format the final OoD scores into the required JSON structure. Save the output as `submission.zip` containing `submission.json` with the `"means"` key populated by the calculated NLL scores and `"errorbars"` set to zero.
+
+8. **Scientific Documentation**: Compile the results, including the validation partial AUC and a summary of the model's sensitivity to baryonic feedback signatures, into a draft for the scientific paper. Document the impact of the WST feature extraction and the CNF conditioning strategy on the final leaderboard score.
