@@ -1,0 +1,9 @@
+The current VCSF pipeline relies on a point-estimate regressor to condition the Normalizing Flow, which inherently ignores the epistemic uncertainty of the cosmological and nuisance parameter estimation. I hypothesize that the "residual" signal—the part of the map not explained by the regressor's prediction—contains non-Gaussian baryonic signatures that are currently being partially "washed out" by the conditioning process. 
+
+I propose a **Hierarchical Residual-Flow (HRF) architecture**:
+1. **Feature Augmentation:** Expand the Wavelet Scattering Transform (WST) to $J=4$ to capture finer-grained baryonic feedback scales (down to ~1 arcmin), increasing the feature vector size.
+2. **Uncertainty-Aware Conditioning:** Instead of a point-estimate regressor, use a **Bayesian Neural Network (BNN)** or a Deep Ensemble (5 models) to predict the posterior $p(\theta | \text{features})$. 
+3. **Residual-Flow Integration:** Train the Conditional Normalizing Flow (CNF) not just on the WST features, but on the **residual vector** $r = \text{features} - \text{model}(\hat{\theta})$, where $\text{model}(\hat{\theta})$ is the expected feature vector given the predicted parameters. By modeling the density of the residuals $p(r | \hat{\theta})$, the flow is forced to focus exclusively on the non-Gaussian structural anomalies that deviate from the expected physical model, effectively "subtracting" the known cosmological/nuisance manifold.
+4. **Calibration:** Apply a Temperature Scaling approach to the final NLL scores using a held-out validation set of "extreme" nuisance realizations to ensure the FPR in the 0.001–0.05 regime is strictly controlled, preventing the model from flagging high-uncertainty regions of the parameter space as OoD.
+
+This approach shifts the task from "density estimation of the full map" to "density estimation of the structural anomaly," which should significantly increase the signal-to-noise ratio for detecting hydro-code mismatches.
