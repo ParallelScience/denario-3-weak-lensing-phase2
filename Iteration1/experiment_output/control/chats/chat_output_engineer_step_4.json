@@ -1,0 +1,268 @@
+[
+  {
+    "name": "control_starter",
+    "content": "",
+    "timestamp": "2026-04-06 13:06:03",
+    "cost": {
+      "Agent": [
+        "control_starter"
+      ],
+      "Model": [
+        "gemini-3.1-flash-lite-preview"
+      ],
+      "Cost": [
+        0.0012025000000000002
+      ],
+      "Prompt Tokens": [
+        4732
+      ],
+      "Completion Tokens": [
+        13
+      ],
+      "Total Tokens": [
+        4745
+      ]
+    }
+  },
+  {
+    "name": "_Group_Tool_Executor",
+    "content": "\n**Step number:** 4 out of 6.\n\n**Sub-task:** Synthetic OoD Validation and Calibration\n\n**Agent in charge of sub-task:** `engineer`\n\n**Instructions:**\n\n- Construct a synthetic OoD validation set by applying a Gaussian notch filter in the Fourier domain (targeting 1\u201310 arcmin scales) to held-out InD maps.\n- Compute the partial AUC between original held-out InD maps and synthetic OoD maps to determine the val_score.\n- Apply a global shift to the NLL scores to calibrate the thresholding and save the calibration parameters.\n- Generate a plot comparing the OoD score distributions for InD vs. synthetic OoD samples.\n\n**Status:** in progress \u23f3\n",
+    "timestamp": "2026-04-06 13:06:03",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "engineer",
+    "content": "**Code Explanation:**\n\nThe code performs synthetic Out-of-Distribution (OoD) validation and calibration. It first loads the necessary data, including the survey mask, the noiseless training convergence maps, and the pre-trained models (Probabilistic Regressor and Conditional Normalizing Flow) along with their corresponding feature scalers and PCA transformations. \n\nTo construct a synthetic OoD validation set, we randomly select 1,000 maps from the training set. For each map, we apply a Gaussian notch filter in the Fourier domain, targeting the 1\u201310 arcmin scales ($\\ell \\approx 5000$). This filter mimics the non-Gaussian structural differences expected from hydro-code mismatches by suppressing power at these specific baryonic scales. We then add the appropriate level of Gaussian noise ($\\sigma \\approx 0.02582$) to both the original (InD) and filtered (OoD) maps.\n\nNext, we reconstruct the 2D maps and compute the Wavelet Scattering Transform (WST) features using `kymatio`. The features are processed through the saved feature selection, scaling, and PCA pipeline. We then compute the Negative Log-Likelihood (NLL) scores for both InD and OoD samples using the pre-trained Regressor and CNF. The Regressor predicts the posterior distribution of the nuisance and cosmological parameters, from which we draw 5 Monte Carlo samples to condition the CNF and compute the average NLL.\n\nFinally, we compute the partial AUC (FPR in [0.001, 0.05]) to evaluate the detection performance on this synthetic task. We calculate a calibration shift based on the mean NLL of the InD samples, which centers the InD distribution around zero. This shift is saved to `data/calibration.json` for use in the final test set inference. A histogram comparing the calibrated NLL distributions of InD and synthetic OoD samples is generated and saved.\n\n**Python Code:**\n\n```python\nimport sys\nimport os\nimport time\nimport numpy as np\nimport torch\nimport torch.nn as nn\nfrom kymatio.torch import Scattering2D\nimport joblib\nimport zuko\nfrom sklearn.metrics import roc_curve\nimport json\nimport matplotlib.pyplot as plt\nimport datetime\n\nclass ProbabilisticRegressor(nn.Module):\n    \"\"\"\n    A 3-layer Multi-Layer Perceptron (MLP) that predicts the mean and log-variance\n    of the cosmological and nuisance parameters given the input features.\n    \"\"\"\n    def __init__(self, input_dim, output_dim, hidden_dim=256):\n        super().__init__()\n        self.net = nn.Sequential(\n            nn.Linear(input_dim, hidden_dim),\n            nn.ReLU(),\n            nn.Linear(hidden_dim, hidden_dim),\n            nn.ReLU()\n        )\n        self.mean_head = nn.Linear(hidden_dim, output_dim)\n        self.logvar_head = nn.Linear(hidden_dim, output_dim)\n        \n    def forward(self, x):\n        \"\"\"\n        Forward pass of the regressor.\n        \n        Args:\n            x (torch.Tensor): Input features of shape (batch_size, input_dim).\n            \n        Returns:\n            tuple: Mean and log-variance of the predicted parameters, both of shape (batch_size, output_dim).\n        \"\"\"\n        h = self.net(x)\n        mean = self.mean_head(h)\n        logvar = self.logvar_head(h)\n        return mean, logvar\n\ndef apply_filter_batch(flat_maps, mask_tensor, F_tensor):\n    \"\"\"\n    Applies a Fourier-domain filter to a batch of flattened maps.\n    \n    Args:\n        flat_maps (torch.Tensor): Flattened valid pixels of shape (batch_size, N_pix).\n        mask_tensor (torch.Tensor): Boolean mask of shape (H, W).\n        F_tensor (torch.Tensor): 2D Fourier filter of shape (H, W).\n        \n    Returns:\n        torch.Tensor: Filtered flattened maps of shape (batch_size, N_pix).\n    \"\"\"\n    batch_size = flat_maps.shape[0]\n    full = torch.zeros((batch_size, mask_tensor.shape[0], mask_tensor.shape[1]), dtype=torch.float32, device='cuda')\n    full[:, mask_tensor] = flat_maps\n    \n    xk = torch.fft.fft2(full)\n    xk_filtered = xk * F_tensor\n    full_filtered = torch.fft.ifft2(xk_filtered).real\n    \n    filtered_flat = full_filtered[:, mask_tensor]\n    return filtered_flat\n\ndef compute_nll(features_scaled, regressor, cnf, device, num_samples=5):\n    \"\"\"\n    Computes the Negative Log-Likelihood (NLL) for a batch of features by marginalizing\n    over the predicted parameter distribution using Monte Carlo sampling.\n    \n    Args:\n        features_scaled (np.ndarray): Scaled PCA features of shape (batch_size, n_components).\n        regressor (nn.Module): Trained ProbabilisticRegressor model.\n        cnf (nn.Module): Trained Conditional Normalizing Flow model.\n        device (torch.device): Device to perform computations on.\n        num_samples (int): Number of Monte Carlo samples to draw from the regressor's posterior.\n        \n    Returns:\n        np.ndarray: Average NLL scores of shape (batch_size,).\n    \"\"\"\n    features_tensor = torch.tensor(features_scaled, dtype=torch.float32, device=device)\n    with torch.no_grad():\n        mean, logvar = regressor(features_tensor)\n        std = torch.exp(0.5 * logvar)\n        \n        nll_list = []\n        for _ in range(num_samples):\n            epsilon = torch.randn_like(std)\n            theta_sample = mean + std * epsilon\n            log_prob = cnf(theta_sample).log_prob(features_tensor)\n            nll_list.append(-log_prob)\n            \n        nll_stack = torch.stack(nll_list, dim=0)\n        avg_nll = nll_stack.mean(dim=0).cpu().numpy()\n        \n    return avg_nll\n\ndef score_phase2(test_labels, ood_scores):\n    \"\"\"\n    Computes the partial AUC scoring metric for the Phase 2 challenge.\n    \n    Args:\n        test_labels (np.ndarray): Ground truth labels (0 for InD, 1 for OoD).\n        ood_scores (np.ndarray): Predicted OoD scores.\n        \n    Returns:\n        float: Mean True Positive Rate (TPR) over the False Positive Rate (FPR) range [0.001, 0.05].\n    \"\"\"\n    fpr, tpr, _ = roc_curve(test_labels, ood_scores)\n    fpr_grid = np.logspace(np.log10(0.001), np.log10(0.05), 100)\n    tpr_interp = np.interp(fpr_grid, fpr, tpr)\n    return np.mean(tpr_interp)\n\ndef main():\n    start_time = time.time()\n    DATA_DIR = \"/home/node/work/weak_lensing_phase2/data/public_data\"\n    OUTPUT_DIR = \"data/\"\n    \n    print(\"Loading data and models...\")\n    mask = np.load(DATA_DIR + \"/WIDE12H_bin2_2arcmin_mask.npy\")\n    kappa = np.load(DATA_DIR + \"/WIDE12H_bin2_2arcmin_kappa_newrealization.npy\", mmap_mode='r')\n    \n    pipeline = joblib.load(OUTPUT_DIR + \"feature_pipeline.pkl\")\n    selected_indices = pipeline['selected_indices']\n    pca_scaler = pipeline['scaler']\n    pca = pipeline['pca']\n    noise_sigma = pipeline['noise_sigma']\n    \n    scalers = joblib.load(OUTPUT_DIR + \"regressor_scalers.pkl\")\n    feature_scaler = scalers['feature_scaler']\n    \n    input_dim = pca.n_components_\n    output_dim = 5\n    \n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    \n    regressor = ProbabilisticRegressor(input_dim=input_dim, output_dim=output_dim, hidden_dim=256).to(device)\n    regressor.load_state_dict(torch.load(OUTPUT_DIR + \"regressor_model.pth\", weights_only=True))\n    regressor.eval()\n    \n    cnf = zuko.flows.MAF(features=input_dim, context=output_dim, transforms=4, hidden_features=[128, 128]).to(device)\n    cnf.load_state_dict(torch.load(OUTPUT_DIR + \"cnf_model.pth\", weights_only=True))\n    cnf.eval()\n    \n    print(\"Initializing Scattering2D and Fourier filter...\")\n    J = 3\n    L = 8\n    shape = (mask.shape[0], mask.shape[1])\n    scattering = Scattering2D(J=J, shape=shape, L=L).to(device)\n    \n    pixsize = 2.0 / 60.0 * np.pi / 180.0\n    kx = np.fft.fftfreq(shape[0], d=pixsize).reshape(-1, 1)\n    ky = np.fft.fftfreq(shape[1], d=pixsize).reshape(1, -1)\n    k = np.sqrt(kx**2 + ky**2)\n    ell = 2 * np.pi * k\n    \n    ell_0 = 5000\n    sigma_ell = 2000\n    A = 0.5\n    F = 1 - A * np.exp(-(ell - ell_0)**2 / (2 * sigma_ell**2))\n    F_tensor = torch.tensor(F, dtype=torch.float32, device=device)\n    mask_tensor = torch.tensor(mask, device=device)\n    \n    N_samples = 1000\n    np.random.seed(42)\n    N_cosmo, N_sys, _ = kappa.shape\n    N_total = N_cosmo * N_sys\n    flat_indices = np.random.choice(N_total, N_samples, replace=False)\n    cosmo_indices = flat_indices // N_sys\n    sys_indices = flat_indices % N_sys\n    \n    batch_size = 50\n    ind_features_list = []\n    ood_features_list = []\n    \n    print(\"Generating synthetic OoD validation set and extracting features...\")\n    for i in range(0, N_samples, batch_size):\n        end = min(i + batch_size, N_samples)\n        batch_cosmo = cosmo_indices[i:end]\n        batch_sys = sys_indices[i:end]\n        \n        flat_maps_np = kappa[batch_cosmo, batch_sys].astype(np.float32)\n        flat_maps = torch.tensor(flat_maps_np, device=device)\n        \n        ood_flat_maps = apply_filter_batch(flat_maps, mask_tensor, F_tensor)\n        \n        noise = torch.randn_like(flat_maps) * noise_sigma\n        ind_noisy = flat_maps + noise\n        ood_noisy = ood_flat_maps + noise\n        \n        ind_full = torch.zeros((end - i, shape[0], shape[1]), dtype=torch.float32, device=device)\n        ind_full[:, mask_tensor] = ind_noisy\n        \n        ood_full = torch.zeros((end - i, shape[0], shape[1]), dtype=torch.float32, device=device)\n        ood_full[:, mask_tensor] = ood_noisy\n        \n        with torch.no_grad():\n            ind_wst = scattering(ind_full).mean(dim=(-1, -2))\n            ood_wst = scattering(ood_full).mean(dim=(-1, -2))\n            \n        ind_features_list.append(ind_wst.cpu().numpy())\n        ood_features_list.append(ood_wst.cpu().numpy())\n        \n        if (i + batch_size) % 200 == 0 or (i + batch_size) >= N_samples:\n            print(\"Processed \" + str(min(i + batch_size, N_samples)) + \"/\" + str(N_samples) + \" samples...\")\n            \n    ind_features = np.concatenate(ind_features_list, axis=0)\n    ood_features = np.concatenate(ood_features_list, axis=0)\n    \n    print(\"Applying feature selection and PCA...\")\n    ind_selected = ind_features[:, selected_indices]\n    ood_selected = ood_features[:, selected_indices]\n    \n    ind_pca = pca.transform(pca_scaler.transform(ind_selected))\n    ood_pca = pca.transform(pca_scaler.transform(ood_selected))\n    \n    ind_scaled = feature_scaler.transform(ind_pca)\n    ood_scaled = feature_scaler.transform(ood_pca)\n    \n    print(\"Computing NLL scores...\")\n    ind_nll = compute_nll(ind_scaled, regressor, cnf, device)\n    ood_nll = compute_nll(ood_scaled, regressor, cnf, device)\n    \n    y_true = np.concatenate([np.zeros(N_samples), np.ones(N_samples)])\n    y_scores = np.concatenate([ind_nll, ood_nll])\n    \n    val_score = score_phase2(y_true, y_scores)\n    print(\"\\n--- Validation Results ---\")\n    print(\"Validation Partial AUC: \" + str(round(val_score, 4)))\n    print(\"InD NLL - Mean: \" + str(round(float(np.mean(ind_nll)), 4)) + \", Std: \" + str(round(float(np.std(ind_nll)), 4)))\n    print(\"OoD NLL - Mean: \" + str(round(float(np.mean(ood_nll)), 4)) + \", Std: \" + str(round(float(np.std(ood_nll)), 4)))\n    \n    shift = float(np.mean(ind_nll))\n    print(\"Calibration shift (mean of InD NLL): \" + str(round(shift, 4)))\n    \n    calibrated_ind_nll = ind_nll - shift\n    calibrated_ood_nll = ood_nll - shift\n    \n    calibration_params = {'shift': shift}\n    with open(OUTPUT_DIR + \"calibration.json\", \"w\") as f:\n        json.dump(calibration_params, f)\n    print(\"Saved calibration parameters to \" + OUTPUT_DIR + \"calibration.json\")\n    \n    print(\"Generating plot...\")\n    plt.rcParams['text.usetex'] = False\n    plt.figure(figsize=(10, 6))\n    plt.hist(calibrated_ind_nll, bins=50, alpha=0.6, label='InD (Calibrated)', density=True)\n    plt.hist(calibrated_ood_nll, bins=50, alpha=0.6, label='Synthetic OoD (Calibrated)', density=True)\n    plt.xlabel('Calibrated NLL Score')\n    plt.ylabel('Density')\n    plt.title('OoD Score Distributions (Val Score: ' + str(round(val_score, 4)) + ')')\n    plt.legend()\n    plt.grid(True, alpha=0.3)\n    plt.tight_layout()\n    \n    timestamp = datetime.datetime.now().strftime(\"%Y%m%d_%H%M%S\")\n    plot_filename = \"data/ood_score_distributions_1_\" + timestamp + \".png\"\n    plt.savefig(plot_filename, dpi=300)\n    print(\"Histogram saved to \" + plot_filename)\n    \n    print(\"Step 4 completed in \" + str(round(time.time() - start_time, 2)) + \" seconds.\")\n\nif __name__ == \"__main__\":\n    main()\n```",
+    "timestamp": "2026-04-06 13:08:48",
+    "cost": {
+      "Agent": [
+        "engineer"
+      ],
+      "Model": [
+        "gemini-3.1-pro-preview"
+      ],
+      "Cost": [
+        0.081884
+      ],
+      "Prompt Tokens": [
+        17746
+      ],
+      "Completion Tokens": [
+        3866
+      ],
+      "Total Tokens": [
+        21612
+      ]
+    }
+  },
+  {
+    "name": "engineer_response_evaluator",
+    "content": "**Code Explanation:**\n\nThe code performs synthetic Out-of-Distribution (OoD) validation and calibration. It first loads the necessary data, including the survey mask, the noiseless training convergence maps, and the pre-trained models (Probabilistic Regressor and Conditional Normalizing Flow) along with their corresponding feature scalers and PCA transformations. To construct a synthetic OoD validation set, we randomly select 1,000 maps from the training set. For each map, we apply a Gaussian notch filter in the Fourier domain, targeting the 1\u201310 arcmin scales (ell approx 5000). This filter mimics the non-Gaussian structural differences expected from hydro-code mismatches by suppressing power at these specific baryonic scales. We then add the appropriate level of Gaussian noise (sigma approx 0.02582) to both the original (InD) and filtered (OoD) maps. Next, we reconstruct the 2D maps and compute the Wavelet Scattering Transform (WST) features using kymatio. The features are processed through the saved feature selection, scaling, and PCA pipeline. We then compute the Negative Log-Likelihood (NLL) scores for both InD and OoD samples using the pre-trained Regressor and CNF. The Regressor predicts the posterior distribution of the nuisance and cosmological parameters, from which we draw 5 Monte Carlo samples to condition the CNF and compute the average NLL. Finally, we compute the partial AUC (FPR in [0.001, 0.05]) to evaluate the detection performance on this synthetic task. We calculate a calibration shift based on the mean NLL of the InD samples, which centers the InD distribution around zero. This shift is saved to data/calibration.json for use in the final test set inference. A histogram comparing the calibrated NLL distributions of InD and synthetic OoD samples is generated and saved.\n\n**Modifications:**\n\nAdded if __name__ == '__main__': block, ensured all paths use the data/ directory, removed LaTeX rendering in plots, and ensured all imports are correct.\n\n**Python Code:**\n\n```python\n# filename: codebase/step_4.py\nimport sys\nimport os\nsys.path.insert(0, os.path.abspath(\"codebase\"))\nimport time\nimport numpy as np\nimport torch\nimport torch.nn as nn\nfrom kymatio.torch import Scattering2D\nimport joblib\nimport zuko\nfrom sklearn.metrics import roc_curve\nimport json\nimport matplotlib.pyplot as plt\nimport datetime\n\nclass ProbabilisticRegressor(nn.Module):\n    def __init__(self, input_dim, output_dim, hidden_dim=256):\n        super().__init__()\n        self.net = nn.Sequential(\n            nn.Linear(input_dim, hidden_dim),\n            nn.ReLU(),\n            nn.Linear(hidden_dim, hidden_dim),\n            nn.ReLU()\n        )\n        self.mean_head = nn.Linear(hidden_dim, output_dim)\n        self.logvar_head = nn.Linear(hidden_dim, output_dim)\n        \n    def forward(self, x):\n        h = self.net(x)\n        mean = self.mean_head(h)\n        logvar = self.logvar_head(h)\n        return mean, logvar\n\ndef apply_filter_batch(flat_maps, mask_tensor, F_tensor):\n    batch_size = flat_maps.shape[0]\n    full = torch.zeros((batch_size, mask_tensor.shape[0], mask_tensor.shape[1]), dtype=torch.float32, device='cuda')\n    full[:, mask_tensor] = flat_maps\n    xk = torch.fft.fft2(full)\n    xk_filtered = xk * F_tensor\n    full_filtered = torch.fft.ifft2(xk_filtered).real\n    filtered_flat = full_filtered[:, mask_tensor]\n    return filtered_flat\n\ndef compute_nll(features_scaled, regressor, cnf, device, num_samples=5):\n    features_tensor = torch.tensor(features_scaled, dtype=torch.float32, device=device)\n    with torch.no_grad():\n        mean, logvar = regressor(features_tensor)\n        std = torch.exp(0.5 * logvar)\n        nll_list = []\n        for _ in range(num_samples):\n            epsilon = torch.randn_like(std)\n            theta_sample = mean + std * epsilon\n            log_prob = cnf(theta_sample).log_prob(features_tensor)\n            nll_list.append(-log_prob)\n        nll_stack = torch.stack(nll_list, dim=0)\n        avg_nll = nll_stack.mean(dim=0).cpu().numpy()\n    return avg_nll\n\ndef score_phase2(test_labels, ood_scores):\n    fpr, tpr, _ = roc_curve(test_labels, ood_scores)\n    fpr_grid = np.logspace(np.log10(0.001), np.log10(0.05), 100)\n    tpr_interp = np.interp(fpr_grid, fpr, tpr)\n    return np.mean(tpr_interp)\n\ndef main():\n    start_time = time.time()\n    DATA_DIR = '/home/node/work/weak_lensing_phase2/data/public_data'\n    OUTPUT_DIR = 'data/'\n    mask = np.load(os.path.join(DATA_DIR, 'WIDE12H_bin2_2arcmin_mask.npy'))\n    kappa = np.load(os.path.join(DATA_DIR, 'WIDE12H_bin2_2arcmin_kappa_newrealization.npy'), mmap_mode='r')\n    pipeline = joblib.load(os.path.join(OUTPUT_DIR, 'feature_pipeline.pkl'))\n    selected_indices = pipeline['selected_indices']\n    pca_scaler = pipeline['scaler']\n    pca = pipeline['pca']\n    noise_sigma = pipeline['noise_sigma']\n    scalers = joblib.load(os.path.join(OUTPUT_DIR, 'regressor_scalers.pkl'))\n    feature_scaler = scalers['feature_scaler']\n    input_dim = pca.n_components_\n    output_dim = 5\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    regressor = ProbabilisticRegressor(input_dim=input_dim, output_dim=output_dim, hidden_dim=256).to(device)\n    regressor.load_state_dict(torch.load(os.path.join(OUTPUT_DIR, 'regressor_model.pth'), weights_only=True))\n    regressor.eval()\n    cnf = zuko.flows.MAF(features=input_dim, context=output_dim, transforms=4, hidden_features=[128, 128]).to(device)\n    cnf.load_state_dict(torch.load(os.path.join(OUTPUT_DIR, 'cnf_model.pth'), weights_only=True))\n    cnf.eval()\n    J = 3\n    L = 8\n    shape = (mask.shape[0], mask.shape[1])\n    scattering = Scattering2D(J=J, shape=shape, L=L).to(device)\n    pixsize = 2.0 / 60.0 * np.pi / 180.0\n    kx = np.fft.fftfreq(shape[0], d=pixsize).reshape(-1, 1)\n    ky = np.fft.fftfreq(shape[1], d=pixsize).reshape(1, -1)\n    k = np.sqrt(kx**2 + ky**2)\n    ell = 2 * np.pi * k\n    ell_0 = 5000\n    sigma_ell = 2000\n    A = 0.5\n    F = 1 - A * np.exp(-(ell - ell_0)**2 / (2 * sigma_ell**2))\n    F_tensor = torch.tensor(F, dtype=torch.float32, device=device)\n    mask_tensor = torch.tensor(mask, device=device)\n    N_samples = 1000\n    np.random.seed(42)\n    N_cosmo, N_sys, _ = kappa.shape\n    N_total = N_cosmo * N_sys\n    flat_indices = np.random.choice(N_total, N_samples, replace=False)\n    cosmo_indices = flat_indices // N_sys\n    sys_indices = flat_indices % N_sys\n    batch_size = 50\n    ind_features_list = []\n    ood_features_list = []\n    for i in range(0, N_samples, batch_size):\n        end = min(i + batch_size, N_samples)\n        batch_cosmo = cosmo_indices[i:end]\n        batch_sys = sys_indices[i:end]\n        flat_maps_np = kappa[batch_cosmo, batch_sys].astype(np.float32)\n        flat_maps = torch.tensor(flat_maps_np, device=device)\n        ood_flat_maps = apply_filter_batch(flat_maps, mask_tensor, F_tensor)\n        noise = torch.randn_like(flat_maps) * noise_sigma\n        ind_noisy = flat_maps + noise\n        ood_noisy = ood_flat_maps + noise\n        ind_full = torch.zeros((end - i, shape[0], shape[1]), dtype=torch.float32, device=device)\n        ind_full[:, mask_tensor] = ind_noisy\n        ood_full = torch.zeros((end - i, shape[0], shape[1]), dtype=torch.float32, device=device)\n        ood_full[:, mask_tensor] = ood_noisy\n        with torch.no_grad():\n            ind_wst = scattering(ind_full).mean(dim=(-1, -2))\n            ood_wst = scattering(ood_full).mean(dim=(-1, -2))\n        ind_features_list.append(ind_wst.cpu().numpy())\n        ood_features_list.append(ood_wst.cpu().numpy())\n    ind_features = np.concatenate(ind_features_list, axis=0)\n    ood_features = np.concatenate(ood_features_list, axis=0)\n    ind_selected = ind_features[:, selected_indices]\n    ood_selected = ood_features[:, selected_indices]\n    ind_pca = pca.transform(pca_scaler.transform(ind_selected))\n    ood_pca = pca.transform(pca_scaler.transform(ood_selected))\n    ind_scaled = feature_scaler.transform(ind_pca)\n    ood_scaled = feature_scaler.transform(ood_pca)\n    ind_nll = compute_nll(ind_scaled, regressor, cnf, device)\n    ood_nll = compute_nll(ood_scaled, regressor, cnf, device)\n    y_true = np.concatenate([np.zeros(N_samples), np.ones(N_samples)])\n    y_scores = np.concatenate([ind_nll, ood_nll])\n    val_score = score_phase2(y_true, y_scores)\n    shift = float(np.mean(ind_nll))\n    calibrated_ind_nll = ind_nll - shift\n    calibrated_ood_nll = ood_nll - shift\n    calibration_params = {'shift': shift}\n    with open(os.path.join(OUTPUT_DIR, 'calibration.json'), 'w') as f:\n        json.dump(calibration_params, f)\n    plt.figure(figsize=(10, 6))\n    plt.hist(calibrated_ind_nll, bins=50, alpha=0.6, label='InD (Calibrated)', density=True)\n    plt.hist(calibrated_ood_nll, bins=50, alpha=0.6, label='Synthetic OoD (Calibrated)', density=True)\n    plt.xlabel('Calibrated NLL Score')\n    plt.ylabel('Density')\n    plt.title('OoD Score Distributions (Val Score: ' + str(round(val_score, 4)) + ')')\n    plt.legend()\n    plt.grid(True, alpha=0.3)\n    plt.tight_layout()\n    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')\n    plot_filename = os.path.join(OUTPUT_DIR, 'ood_score_distributions_1_' + timestamp + '.png')\n    plt.savefig(plot_filename, dpi=300)\n\nif __name__ == '__main__':\n    main()\n```",
+    "timestamp": "2026-04-06 13:08:59",
+    "cost": {
+      "Agent": [
+        "engineer_response_evaluator"
+      ],
+      "Model": [
+        "gemini-3.1-flash-lite-preview"
+      ],
+      "Cost": [
+        0.00695425
+      ],
+      "Prompt Tokens": [
+        9091
+      ],
+      "Completion Tokens": [
+        3121
+      ],
+      "Total Tokens": [
+        12212
+      ]
+    }
+  },
+  {
+    "name": "executor",
+    "content": "Execution results:\n\nExecution output: \n",
+    "timestamp": "2026-04-06 13:09:19",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "execution_recorder",
+    "content": "Code execution recorded.\n\nExecution output:\nExecution results:\n\nExecution output: \n",
+    "timestamp": "2026-04-06 13:09:19",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "executor_response_evaluator",
+    "content": "",
+    "timestamp": "2026-04-06 13:09:20",
+    "cost": {
+      "Agent": [
+        "executor_response_evaluator"
+      ],
+      "Model": [
+        "gemini-3.1-flash-lite-preview"
+      ],
+      "Cost": [
+        0.00022999999999999998
+      ],
+      "Prompt Tokens": [
+        740
+      ],
+      "Completion Tokens": [
+        30
+      ],
+      "Total Tokens": [
+        770
+      ]
+    }
+  },
+  {
+    "name": "_Group_Tool_Executor",
+    "content": "Code execution successful. 1 new image(s) generated.\n\n\nxxxxxxxxxxxxxxxxxxxxxxxxxx\n\nWorkflow status:\n\nPlan step number: 4\n\nAgent for sub-task (might be different from the next agent suggestion for debugging): engineer\n\nStep status (before execution): in progress\n\nCode status: success\n\nxxxxxxxxxxxxxxxxxxxxxxxxxx\n\n\nPlease review the generated images and provide feedback.",
+    "timestamp": "2026-04-06 13:09:20",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "image_reviewer",
+    "content": "[{'type': 'text', 'text': '**Needs Revision:** no\\n\\n**Issues:**\\nNone\\n\\n**Suggestions:**\\nNone\\n\\n**Summary:**\\nThe plot is clear, well-labeled, and correctly shows the requested data. It compares the calibrated NLL score distributions for In-Distribution (InD) and synthetic Out-of-Distribution (OoD) samples, including the validation score in the title. The distributions are highly overlapping, which is consistent with the low validation score reported.', 'extras': {'signature': 'EjQKMgG+Pvb7uc/cnaqXBr4vMYupYozBZKnMlbuY1eMLVKaFWz8Ne6B9VCH67UHpgPdtePNv'}}]",
+    "timestamp": "2026-04-06 13:09:24",
+    "cost": {
+      "Agent": [
+        "image_reviewer"
+      ],
+      "Model": [
+        "gemini-3.1-flash-image-preview"
+      ],
+      "Cost": [
+        0.000361575
+      ],
+      "Prompt Tokens": [
+        4457
+      ],
+      "Completion Tokens": [
+        91
+      ],
+      "Total Tokens": [
+        4548
+      ]
+    }
+  },
+  {
+    "name": "image_review_recorder",
+    "content": "",
+    "timestamp": "2026-04-06 13:09:25",
+    "cost": {
+      "Agent": [
+        "image_review_recorder"
+      ],
+      "Model": [
+        "gemini-3.1-flash-lite-preview"
+      ],
+      "Cost": [
+        0.00027525
+      ],
+      "Prompt Tokens": [
+        513
+      ],
+      "Completion Tokens": [
+        98
+      ],
+      "Total Tokens": [
+        611
+      ]
+    }
+  },
+  {
+    "name": "_Group_Tool_Executor",
+    "content": "Image review passed. Step marked as complete.\n\nSummary: The plot is clear, well-labeled, and correctly shows the requested data. It compares the calibrated NLL score distributions for In-Distribution (InD) and synthetic Out-of-Distribution (OoD) samples, including the validation score in the title. The distributions are highly overlapping, which is consistent with the low validation score reported.",
+    "timestamp": "2026-04-06 13:09:25",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "controller",
+    "content": "",
+    "timestamp": "2026-04-06 13:09:26",
+    "cost": {
+      "Agent": [
+        "controller"
+      ],
+      "Model": [
+        "gemini-3.1-flash-lite-preview"
+      ],
+      "Cost": [
+        0.00314425
+      ],
+      "Prompt Tokens": [
+        11725
+      ],
+      "Completion Tokens": [
+        142
+      ],
+      "Total Tokens": [
+        11867
+      ]
+    }
+  },
+  {
+    "name": "_Group_Tool_Executor",
+    "content": "\n**Step number:** 5 out of 6.\n\n**Sub-task:** Robust Inference and Submission Generation\n\n**Agent in charge of sub-task:** `engineer`\n\n**Instructions:**\n\n- Perform vectorized inference on the 10,000 test maps using the trained CNF and regressor.\n- Draw N=5 samples of \\theta from the regressor's predictive distribution for each test map.\n- Compute the final calibrated OoD score as the average negative log-likelihood.\n- Generate the submission.zip file with the required means and errorbars.\n\n**Step status:** in progress \u23f3\n\n**Code status:** None\n\n**Step iteration:** 2/10\n        ",
+    "timestamp": "2026-04-06 13:09:26",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "terminator",
+    "content": "TERMINATE",
+    "timestamp": "2026-04-06 13:09:26",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  }
+]

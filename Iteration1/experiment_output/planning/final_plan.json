@@ -1,0 +1,65 @@
+{
+    "sub_tasks": [
+        {
+            "bullet_points": [
+                "Reconstruct 2D maps from flattened arrays and apply on-the-fly Gaussian noise (\\sigma \\approx 0.02582) using the survey mask.",
+                "Compute Wavelet Scattering Transform (WST) coefficients (J=3, L=8) using kymatio's CUDA backend in batches to stay within the 600s budget.",
+                "Perform feature selection using mutual_info_regression with cosmological parameters (\\Omega_m, S_8) as targets to isolate non-Gaussian baryonic signals.",
+                "Apply PCA to reduce the selected WST features to 50–100 components and save the PCA transform and normalization statistics."
+            ],
+            "sub_task": "Feature Extraction and Dimensionality Reduction",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 600
+        },
+        {
+            "bullet_points": [
+                "Train a 3-layer MLP with a Gaussian output head to predict the mean and variance of the 5 parameters (\\Omega_m, S_8, T_{AGN}, f_0, \\Delta z).",
+                "Standardize input features and output parameters, saving the normalization statistics for consistent use in subsequent steps.",
+                "Save the trained regressor model weights and report the parameter prediction RMSE."
+            ],
+            "sub_task": "Probabilistic Parameter Regressor Training",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 900
+        },
+        {
+            "bullet_points": [
+                "Train a Masked Autoregressive Flow (MAF) to learn the conditional density p(PCA-reduced WST features | \\theta).",
+                "Condition the flow on the 5 parameters predicted by the regressor.",
+                "Implement gradient clipping and learning rate scheduling to ensure stable convergence within 900s.",
+                "Save the trained CNF model and report training/validation NLL."
+            ],
+            "sub_task": "Conditional Normalizing Flow (CNF) Training",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 900
+        },
+        {
+            "bullet_points": [
+                "Construct a synthetic OoD validation set by applying a Gaussian notch filter in the Fourier domain (targeting 1–10 arcmin scales) to held-out InD maps.",
+                "Compute the partial AUC between original held-out InD maps and synthetic OoD maps to determine the val_score.",
+                "Apply a global shift to the NLL scores to calibrate the thresholding and save the calibration parameters.",
+                "Generate a plot comparing the OoD score distributions for InD vs. synthetic OoD samples."
+            ],
+            "sub_task": "Synthetic OoD Validation and Calibration",
+            "sub_task_agent": "engineer"
+        },
+        {
+            "bullet_points": [
+                "Perform vectorized inference on the 10,000 test maps using the trained CNF and regressor.",
+                "Draw N=5 samples of \\theta from the regressor's predictive distribution for each test map.",
+                "Compute the final calibrated OoD score as the average negative log-likelihood.",
+                "Generate the submission.zip file with the required means and errorbars."
+            ],
+            "sub_task": "Robust Inference and Submission Generation",
+            "sub_task_agent": "engineer"
+        },
+        {
+            "bullet_points": [
+                "Analyze the performance metrics, including val_score, feature counts, PCA variance explained, parameter RMSE, and flow NLL.",
+                "Discuss the effectiveness of the WST-CNF pipeline and the role of nuisance parameter marginalization in achieving robustness.",
+                "Write the full Results section of the paper, interpreting the quantitative findings and the impact of the proposed method on the OoD detection task, referencing the plots generated in Step 4."
+            ],
+            "sub_task": "Results Interpretation and Paper Writing",
+            "sub_task_agent": "researcher"
+        }
+    ]
+}
