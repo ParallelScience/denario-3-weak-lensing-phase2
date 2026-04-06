@@ -1,0 +1,15 @@
+1. **GPU-Accelerated Feature Extraction**: Compute the Wavelet Scattering Transform (WST) using `kymatio` on the GPU. Use $J=4$ and $L=8$ to capture non-Gaussian small-scale baryonic signatures. To ensure robustness, compute the empirical standard deviation of each WST coefficient across the training set and apply a variance-stabilizing transform (dividing coefficients by their empirical standard deviation). This prevents noise-dominated high-frequency modes from biasing the density estimation.
+
+2. **Conditional Normalizing Flow (CNF) Architecture**: Implement a Masked Autoregressive Flow (MAF) using `zuko`. The flow will model the conditional density $p(\text{WST} | \Omega_m, S_8, T_{AGN}, f_0, \Delta z)$. To ensure the model learns the nuisance manifold, incorporate "Nuisance-Augmentation" during training: for each training map, randomly jitter the nuisance parameters within their physical bounds to force the flow to learn a smoother, more robust conditional density.
+
+3. **Training with Nuisance-Aware Conditioning**: Train the CNF on the full 25,856 training maps. Use a negative log-likelihood (NLL) loss function. To prevent the model from flagging extreme-but-InD nuisance realizations as OoD, explicitly oversample the 5th and 95th percentile realizations of $T_{AGN}$ and $f_0$ in the training batches.
+
+4. **Epistemic Uncertainty via MC Dropout**: To generate `errorbars` within the compute budget, train a single, deep CNF with dropout layers enabled. During inference, perform 5 forward passes per test map using MC Dropout. The final OoD score is the mean NLL across these passes, and the `errorbars` are the standard deviation of the NLLs, serving as a proxy for epistemic uncertainty.
+
+5. **Validation via Held-Out Cosmologies**: Create a validation set by holding out 20% of the cosmological models. Ensure this set includes a diverse mix of the 256 realizations per cosmology. Calculate the partial AUC on this validation set to confirm the model generalizes to unseen cosmologies and successfully marginalizes over nuisance parameters.
+
+6. **Inference Optimization**: To meet the 5-minute limit, process the 10,000 test maps in large batches. Combine the 5 MC Dropout passes into a single tensor operation (50,000 samples) to maximize GPU utilization. Use `torch.cuda.amp` for mixed-precision calculations to maintain speed without sacrificing precision.
+
+7. **Score Calibration**: Calibrate the final NLL scores using a Z-score approach relative to the mean and standard deviation of the InD validation set. This normalization ensures the scores are robust to outliers and provides a stable distribution for the partial AUC calculation.
+
+8. **Submission Generation**: Aggregate the mean NLL scores and the MC Dropout standard deviations into the `submission.json` format. Verify that the order of the 10,000 scores matches the input test file exactly. Save the final submission as a ZIP file, ensuring all metadata complies with the competition requirements.
