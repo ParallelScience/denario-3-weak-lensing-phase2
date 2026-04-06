@@ -1,0 +1,552 @@
+
+###### PROMPT BEGINS ########
+Human: You are provided with a data description and an idea for a scientific paper. Your task is to think about the methods to use in order to carry it out. If this is not first iteration, you will also be provided with the previous research plan along with some feedback on it. If this is the case, take into account the feedback provided when designing the new research plan.
+
+Follow these instructions:
+- generate a detailed description of the methodology that will be used to perform the research project.
+- The description should clearly outline the steps, techniques, and rationale derived from the exploratory data analysis (EDA).
+- The focus should be strictly on the methods and workflow for this specific project to be performed. **do not include** any discussion of future directions, future work, project extensions, or limitations.
+- The description should be written as if it were a senior researcher explaining to her research assistant how to perform the research necessary for this project.
+- Just provide the methods, do not add a sentence at the beginning saying showing your thinking process
+- Your report will be sent to coding agents. Thus, do not write code here.
+- The research plan should include no more than 8 steps. Each of these steps can have several substeps
+- If feedback is present, you are allowed to edit steps and also remove steps if they are not needed for new iterations
+
+Data description:
+# Data Description: NeurIPS 2025 FAIR Universe Weak Lensing Uncertainty Challenge (Phase 2)
+
+## Objective
+
+**Maximize the leaderboard score on Codabench competition #10902, and produce a scientific paper describing the method and results.**
+
+This is a full research cycle: for each iteration, we (1) develop an OoD detection method, (2) produce a competition submission file, and (3) write a paper describing the approach and findings. The goal is both to achieve the highest possible competition score and to contribute scientifically to the field of simulation-based inference and OoD detection for cosmology.
+
+The task is **out-of-distribution (OoD) detection** on weak gravitational lensing convergence maps. Given 10,000 test maps (mix of in-distribution [InD] and out-of-distribution [OoD]), assign a continuous OoD score t(x_i) ∈ ℝ to each test sample such that OoD samples receive higher scores than InD samples.
+
+**Scoring metric (to maximize):**
+```
+score = (1/100) * sum_i TPR(FPR_i)
+```
+where FPR_i are 100 log-spaced values in [0.001, 0.05]. This is the mean TPR over a partial ROC curve in the low-FPR regime. A perfect classifier scores 1.0; a random classifier scores ~0.05. The metric rewards high OoD detection sensitivity at very low false positive rates (0.1% to 5%).
+
+**Primary deliverable — submission file:** A ZIP file saved at `/home/node/work/weak_lensing_phase2/submission.zip` containing `submission.json` with two keys:
+- `"means"`: list of 10,000 floats (the OoD scores, one per test sample, in the same order as the test file)
+- `"errorbars"`: list of 10,000 floats (uncertainty estimates, can be zeros)
+
+This file must be produced at the end of every analysis run. It is the primary output that will be uploaded to Codabench.
+
+**Secondary deliverable — validation score:** Ground-truth test labels are withheld by Codabench. Use a held-out validation split of the training data (hold out 20% of cosmologies or realizations) to estimate the partial AUC locally. Report this as `val_score` in the results.
+
+**Compute budget — 30 minutes per pipeline step (hard limit).** Each step has a 1800-second timeout. Design for:
+- Feature extraction (all 25,856 training maps): ≤ 10 min
+- Model training (flow, CNN, etc.): ≤ 15 min
+- Test set scoring (10,000 maps): ≤ 5 min
+- Use GPU (device='cuda') wherever possible
+- If a step risks timeout, reduce model complexity or subsample rather than failing
+
+---
+
+## Nature of the OoD Signal — Critical Context
+
+The training data is generated with one specific hydrodynamical simulation code implementing baryonic feedback (AGN feedback, stellar winds, etc.). The OoD test samples are generated with the **same cosmological parameters and same physical model in principle, but using a different hydrodynamical simulation engine** — a different numerical implementation of the same baryonic physics.
+
+This means:
+- The OoD signal is **not** a different cosmology (Ω_m, S_8 values are the same distribution)
+- The OoD signal is **not** the known nuisance parameters (T_AGN, f_0, Δz — these are already varied in training)
+- The OoD signal is a **subtle difference in the non-Gaussian small-scale structure** arising from how different hydro codes implement baryonic feedback numerically
+- The signal is expected to appear primarily at **small scales (high ℓ, baryonic feedback scales ~1-10 arcmin)** — in the non-Gaussian features of the convergence field, not in the Gaussian (power spectrum) part
+- Features sensitive to **higher-order statistics, peak distributions, void statistics, Minkowski functionals, and wavelet/scattering coefficients** are expected to be more discriminative than the power spectrum alone
+- The method must be robust to the known nuisances (T_AGN, f_0, Δz) already present in training — these must NOT trigger false OoD flags
+
+This is a classic **simulation model mismatch** problem: can we detect when the data comes from a different hydro code, given that we only trained on one?
+
+---
+
+## Data Files (all at absolute paths)
+
+### 1. Training convergence maps
+**Path:** `/home/node/work/weak_lensing_phase2/data/public_data/WIDE12H_bin2_2arcmin_kappa_newrealization.npy`
+- **Shape:** `(101, 256, 132019)` — dtype: `float16`
+- 101 cosmological models × 256 systematic realizations × 132,019 valid pixels per map
+- **IMPORTANT:** Data is stored as **flattened valid pixels only** (not full 2D arrays). To reconstruct 2D maps, use the mask (see below):
+  ```python
+  mask = np.load(".../WIDE12H_bin2_2arcmin_mask.npy")  # shape (1424, 176), dtype bool
+  full_map = np.zeros((1424, 176), dtype=np.float32)
+  full_map[mask] = kappa[cosmo_idx, sys_idx].astype(np.float32)
+  ```
+- Training maps are **noiseless**. Gaussian noise must be added before use:
+  ```python
+  ng = 30  # galaxies per arcmin²
+  pixel_size = 2.0  # arcmin
+  noise_sigma = 0.4 / (2 * ng * pixel_size**2)**0.5  # ≈ 0.02582
+  noisy_map = noiseless_map + np.random.randn(*noiseless_map.shape) * noise_sigma * mask
+  ```
+- Memory: 6.8 GB as float16 (as stored), 13.7 GB if cast to float32
+- Convergence range: approximately [-0.05, 0.23]
+
+### 2. Test convergence maps
+**Path:** `/home/node/work/weak_lensing_phase2/data/public_data/WIDE12H_bin2_2arcmin_kappa_test_phase2_test.npy`
+- **Shape:** `(10000, 132019)` — dtype: `float64`
+- 10,000 noisy test maps stored as flattened valid pixels
+- **Already noisy** (noise added with ng=30, pixel_size=2 arcmin)
+- Reconstruct 2D with `full_map[mask] = kappa_test[i]`
+- Memory: 10.6 GB
+- Mix of InD (label=0) and OoD (label=1) — ground truth labels withheld
+
+### 3. Survey mask
+**Path:** `/home/node/work/weak_lensing_phase2/data/public_data/WIDE12H_bin2_2arcmin_mask.npy`
+- **Shape:** `(1424, 176)` — dtype: `bool`
+- 132,019 of 250,624 pixels are valid (52.7%)
+- Apply when adding noise: zero noise outside survey area
+
+### 4. Training labels
+**Path:** `/home/node/work/weak_lensing_phase2/data/public_data/label.npy`
+- **Shape:** `(101, 256, 5)` — dtype: `float64`
+- `[..., 0]` = Ω_m: range [0.091, 0.619], mean 0.290 — cosmological parameter
+- `[..., 1]` = S_8: range [0.680, 0.955], mean 0.814 — cosmological parameter
+- `[..., 2]` = T_AGN ∈ [7.20, 8.50], uniform — **nuisance, marginalize**
+- `[..., 3]` = f_0 ∈ [0.00004, 0.0264], uniform — **nuisance, marginalize**
+- `[..., 4]` = Δz ~ N(0, 0.022) — **nuisance, marginalize**
+- Cosmological parameters vary across 101 cosmologies (axis 0)
+- Nuisance parameters vary across 256 realizations (axis 1)
+
+---
+
+## Key Utility Code
+
+```python
+import numpy as np
+
+DATA_DIR = "/home/node/work/weak_lensing_phase2/data/public_data"
+
+# Load all files
+mask       = np.load(f"{DATA_DIR}/WIDE12H_bin2_2arcmin_mask.npy")           # (1424, 176) bool
+kappa      = np.load(f"{DATA_DIR}/WIDE12H_bin2_2arcmin_kappa_newrealization.npy", mmap_mode='r')  # (101, 256, 132019) float16
+kappa_test = np.load(f"{DATA_DIR}/WIDE12H_bin2_2arcmin_kappa_test_phase2_test.npy", mmap_mode='r')  # (10000, 132019) float64
+label      = np.load(f"{DATA_DIR}/label.npy")                                # (101, 256, 5) float64
+
+# Add noise to a flat training map
+def add_noise(flat_map, mask, ng=30, pixel_size=2.0):
+    noise_sigma = 0.4 / (2 * ng * pixel_size**2)**0.5  # ≈ 0.02582
+    return flat_map + np.random.randn(*flat_map.shape) * noise_sigma * mask[mask]
+
+# Reconstruct 2D map from flat valid pixels
+def to_2d(flat_map, mask):
+    full = np.zeros(mask.shape, dtype=np.float32)
+    full[mask] = flat_map.astype(np.float32)
+    return full  # shape (1424, 176)
+
+# Scoring metric (partial AUC, FPR in [0.001, 0.05])
+from sklearn.metrics import roc_curve
+def score_phase2(test_labels, ood_scores):
+    fpr, tpr, _ = roc_curve(test_labels, ood_scores)
+    fpr_grid = np.logspace(np.log10(0.001), np.log10(0.05), 100)
+    tpr_interp = np.interp(fpr_grid, fpr, tpr)
+    return np.mean(tpr_interp)
+
+# Save submission
+import json, zipfile
+def save_submission(ood_scores, errorbars=None, save_dir="/home/node/work/weak_lensing_phase2"):
+    if errorbars is None:
+        errorbars = [0.0] * len(ood_scores)
+    data = {"means": list(map(float, ood_scores)), "errorbars": list(map(float, errorbars))}
+    json_path = f"{save_dir}/submission.json"
+    zip_path  = f"{save_dir}/submission.zip"
+    with open(json_path, 'w') as f:
+        json.dump(data, f)
+    with zipfile.ZipFile(zip_path, 'w') as zf:
+        zf.write(json_path, "submission.json")
+    return zip_path
+```
+
+### Power spectrum utility (from starting kit)
+```python
+import scipy.stats
+def power_spectrum(x, pixsize, kedge):
+    """Azimuthally averaged 2D power spectrum. x: 2D array, pixsize: pixel size in radians."""
+    assert x.ndim == 2
+    xk = np.fft.rfft2(x)
+    xk2 = (xk * xk.conj()).real
+    Nmesh = x.shape
+    k = np.zeros((Nmesh[0], Nmesh[1]//2+1))
+    k += np.fft.fftfreq(Nmesh[0], d=pixsize).reshape(-1, 1) ** 2
+    k += np.fft.rfftfreq(Nmesh[1], d=pixsize).reshape(1, -1) ** 2
+    k = np.sqrt(k)
+    power, _, _ = scipy.stats.binned_statistic(k.ravel(), xk2.ravel(), statistic='mean', bins=kedge)
+    k_centers, _, _ = scipy.stats.binned_statistic(k.ravel(), k.ravel(), statistic='mean', bins=kedge)
+    norm = x.size * pixsize**2
+    return k_centers, power / norm
+```
+
+---
+
+## Baselines (known to be suboptimal — to be improved upon)
+
+Three baselines from the competition starting kit use power spectrum χ², CNN parameter estimation χ², and autoencoder reconstruction error. All rely on Gaussian or low-dimensional summary statistics and are known to miss the non-Gaussian OoD signal. Any method exploiting higher-order statistics or learned density estimation should substantially outperform them.
+
+---
+
+## Hardware Available
+
+- **CPU:** 32 vCPUs (AMD Threadripper PRO 9995WX), cgroup limit
+- **RAM:** 64 GB (cgroup hard limit) — use mmap_mode='r' and float16 to stay within budget
+- **GPU:** NVIDIA RTX PRO 6000 Blackwell, 97.9 GB VRAM, CUDA 12.8
+- **Python:** `/opt/denario-venv/bin/python3.12`
+- **Installed:** torch 2.11+cu128, torchvision, numpy, scipy, scikit-learn, kymatio (wavelet scattering), zuko (normalizing flows), emcee, h5py, joblib, matplotlib
+
+---
+
+## Important Notes
+
+1. **Data is NOT 2D images in the files.** Stored as 1D arrays of 132,019 valid pixels. Always reconstruct to 2D before 2D operations (FFT, convolutions, scattering transforms).
+
+2. **Training data is noiseless; test data is noisy.** Always add noise to training maps before computing features.
+
+3. **Multiple noise realizations are free.** Add noise with different seeds to augment the training set.
+
+4. **No inter-sample information at test time.** OoD scores must be independent per sample (disqualification rule).
+
+5. **Nuisance parameters must be marginalized.** Methods that flag T_AGN, f_0, or Δz variation as OoD will score poorly. The 256 realizations per cosmology cover this variation fully.
+
+
+Idea:
+**Title: Variational Conditional Scattering-Flow (VCSF) for Robust Baryonic OoD Detection**
+
+To detect subtle inter-code hydrodynamical differences while marginalizing over nuisance parameters, we implement a two-stage pipeline: a Wavelet Scattering Transform (WST) feature extractor followed by a Conditional Normalizing Flow (CNF). We utilize `kymatio` to compute scattering coefficients (scales $1–10$ arcmin) which capture non-Gaussian baryonic signatures while suppressing Gaussian noise. The CNF, implemented as a Masked Autoregressive Flow, is trained on the full 25,856 training maps to learn the conditional density $p(\text{features} | \Omega_m, S_8, T_{AGN}, f_0, \Delta z)$. To meet the 5-minute inference limit, we replace expensive Monte Carlo integration with a lightweight ensemble approach: a pre-trained ResNet-18 regressor predicts the posterior distribution of the five parameters, providing a mean vector $\hat{\theta}$ and an uncertainty covariance $\Sigma$. The final OoD score is the negative log-likelihood $-\log p(\text{features} | \hat{\theta})$, averaged over an ensemble of 5 samples drawn from the regressor's predictive posterior to ensure robustness against nuisance-driven estimation noise. This approach effectively isolates the non-Gaussian structural anomalies caused by hydro-code implementation differences while remaining invariant to the known variance of cosmological and baryonic nuisance parameters.
+
+Previous research plan:
+1. **Dynamic Noise Augmentation and Data Preparation**: Reconstruct 2D maps from flattened arrays using the provided mask. Implement an on-the-fly noise generator that adds Gaussian noise ($\sigma \approx 0.02582$) to noiseless training maps during each epoch. This ensures the model learns the distribution of the noise-corrupted signal rather than static noise patterns. Use `mmap_mode='r'` and explicit memory management (`del` tensors, `torch.cuda.empty_cache()`) to stay within the 64GB RAM limit.
+
+2. **Feature Extraction and Selection**: Compute the Wavelet Scattering Transform (WST) using `kymatio` ($J=3, L=8$). To optimize within the 10-minute limit, use `sklearn.feature_selection.mutual_info_regression` to identify and remove features that are purely noise-dominated or redundant. Retain features sensitive to non-Gaussian structure; do not discard features solely based on nuisance parameter correlation, as the Conditional Normalizing Flow (CNF) will handle nuisance marginalization.
+
+3. **Probabilistic Parameter Regressor**: Train a 3-layer MLP with a Gaussian output head to predict the mean $\mu_\theta$ and diagonal variance $\sigma^2_\theta$ for the 5 parameters. Use a negative log-likelihood loss. Train this regressor as a pre-processing step or simultaneously with the CNF using a shared feature representation to save compute time. Apply gradient clipping and use a learning rate scheduler to ensure stable convergence.
+
+4. **Conditional Normalizing Flow (CNF) Training**: Train a Masked Autoregressive Flow (MAF) to learn $p(\text{WST features} | \theta)$. Condition the flow on the 5 parameters. Use a shallower architecture (3-4 transforms) to ensure training completes within the 15-minute window while prioritizing more epochs for better convergence. Implement gradient clipping and `ReduceLROnPlateau` to handle the noise-induced variance in the training loss.
+
+5. **Robust Inference via Vectorized Monte Carlo**: For each of the 10,000 test maps, draw $N=5$ samples of $\theta_i$ from the regressor's predictive distribution $q(\theta | \text{features})$. To meet the 5-minute inference limit, stack these into a single batch of 50,000 samples and perform a fully vectorized forward pass through the CNF. Compute the OoD score as the average negative log-likelihood: $S = -\frac{1}{N} \sum_{i=1}^N \log p(\text{features} | \theta_i)$.
+
+6. **Realistic OoD Validation**: Create a validation set using a subset of held-out InD cosmologies. Apply a "baryonic suppression" filter in the Fourier domain, $F(\ell) = 1 - A \cdot \exp(-(\ell - \ell_0)^2 / 2\sigma^2)$, where $\ell_0$ targets the 1-10 arcmin range, to mimic the non-Gaussian structural differences of hydro-code mismatches. Use this to calculate the partial AUC and calibrate the thresholding.
+
+7. **Calibration**: Perform calibration using only the held-out InD validation set. Apply a global shift to the NLL scores such that the mean of the InD validation scores is centered at a baseline value. Avoid using the test set for calibration to prevent biasing the scores due to the presence of unknown OoD samples.
+
+8. **Submission and Documentation**: Save the final calibrated scores as `submission.json`. Populate `errorbars` with the variance of the NLL scores across the $N=5$ Monte Carlo samples, ensuring they are scaled to avoid evaluation script issues. Document the impact of the dynamic noise augmentation, the Bayesian regressor, and the vectorized inference on the final partial AUC.
+
+Feedback on previous research plan:
+The VCSF pipeline is conceptually sound, but the current results reveal a critical methodological vulnerability: the reliance on PCA for dimensionality reduction prior to density estimation. While PCA captures 97.97% of the variance, it is a linear transformation that assumes Gaussianity in the feature space. The non-Gaussian structural information (peaks, voids, filaments) that you correctly identified as the target signal is likely encoded in the higher-order moments of the WST coefficients, which PCA explicitly discards as "low variance" components.
+
+**Critical Weaknesses & Gaps:**
+1. **Information Loss via PCA:** By reducing 150 WST features to 75 PCs, you are likely discarding the very non-Gaussian "tails" of the distribution that distinguish different hydro-code implementations. If the OoD signal is subtle and non-Gaussian, it is almost certainly hidden in the components PCA treats as noise.
+2. **Synthetic Validation Bias:** Your synthetic validation (Fourier notch filter) is a "straw man" perturbation. It tests if the model can detect a global power-spectrum suppression, which is a much easier task than detecting the subtle, localized, and non-linear baryonic feedback differences between two hydro codes. This explains the "exquisite sensitivity" you observed, which may not translate to the actual test set.
+3. **Regressor Over-confidence:** You report an RMSE for $T_{AGN}$ of 0.33. Given the range [7.2, 8.5], this is a significant error. If the regressor is wrong, the CNF is conditioned on the wrong $\theta$, leading to a high NLL that is a false positive (nuisance-driven) rather than a true OoD signal.
+
+**Actionable Recommendations:**
+1. **Eliminate PCA:** The MAF (Masked Autoregressive Flow) is specifically designed to handle high-dimensional, correlated data. Feed the raw 150 WST features directly into the MAF. If compute budget is a concern, use a smaller number of layers in the MAF rather than reducing the feature dimensionality.
+2. **Refine Synthetic Validation:** Replace the Fourier notch filter with a "Hydro-Swap" proxy. Use a subset of your training data generated with a different (if available) or perturbed subgrid model (e.g., vary $T_{AGN}$ to its extreme bounds) to see if the model flags these as OoD. If it does, your model is not yet invariant to nuisance parameters.
+3. **Improve Nuisance Marginalization:** Instead of just sampling $\theta$ from the regressor, incorporate the regressor's uncertainty directly into the CNF training. Use a "Variational Information Bottleneck" approach where the CNF is trained to maximize the evidence lower bound (ELBO) on the features, effectively forcing the model to learn a representation that is invariant to the nuisance parameters $\theta$.
+4. **Feature Importance:** Instead of `mutual_info_regression` (which is linear-centric), use a Random Forest regressor to rank feature importance. This will capture non-linear dependencies between WST coefficients and the physical parameters, providing a more robust feature selection for the non-Gaussian signal.
+
+**Future Iteration Focus:**
+Stop optimizing for the synthetic validation score. Focus on the "nuisance-invariance" test: if you pass a training map with an extreme $T_{AGN}$ value, the NLL score should remain low. If it spikes, your model is failing the core requirement of the challenge.
+
+
+Respond in this format:
+
+\\begin{METHODS}
+<METHODS>
+\\end{METHODS}
+
+In <METHODS> put the methods you have generated.
+
+###### PROMPT ENDS ########
+
+\begin{METHODS}
+1. **Feature Engineering and Non-Linear Selection**: Compute the Wavelet Scattering Transform (WST) using `kymatio` ($J=3, L=8$) on the reconstructed 2D maps. To avoid the information loss associated with linear dimensionality reduction, retain the full set of scattering coefficients. Use a Random Forest Regressor to rank the importance of these coefficients in predicting the five physical parameters ($\Omega_m, S_8, T_{AGN}, f_0, \Delta z$). Select the top 100 features that exhibit the highest non-linear dependency with the parameters, ensuring that higher-order structural information is preserved.
+
+2. **Variational Information Bottleneck (VIB) Training**: Implement a VIB framework where the feature encoder (a multi-layer perceptron) maps the WST coefficients to a latent representation $z$. Train this encoder to maximize the mutual information between $z$ and the physical parameters $\theta$ while simultaneously minimizing the information $z$ contains about the input features $x$ that is not relevant to $\theta$. This forces the latent space to capture the physical signal while discarding nuisance-driven variance.
+
+3. **Conditional Normalizing Flow (CNF) Architecture**: Replace the PCA-based pipeline with a Masked Autoregressive Flow (MAF) that operates directly on the VIB-compressed latent space. Condition the flow on the predicted parameters $\hat{\theta}$ derived from the VIB encoder. Use 5-8 coupling layers to ensure sufficient capacity to model the non-Gaussian density of the scattering coefficients without exceeding the 15-minute training budget.
+
+4. **Nuisance-Invariance Training**: To ensure the model is robust to nuisance parameters, implement a "Nuisance-Swap" training objective. During training, augment the batch by pairing maps with extreme values of $T_{AGN}$ and $f_0$. Penalize the model if the NLL of these extreme-nuisance samples deviates significantly from the mean NLL of the training distribution. This forces the CNF to learn a density that is invariant to the known range of baryonic feedback parameters.
+
+5. **Validation via Hydro-Swap Proxy**: Replace the synthetic Fourier notch filter with a "Hydro-Swap" validation set. Partition the training data by $T_{AGN}$ and $f_0$ values. Use the subset with the most extreme parameter values as a proxy for OoD samples. Calculate the partial AUC on this subset to verify that the model maintains low NLL scores for extreme InD samples, confirming that the model is not flagging nuisance-driven variance as OoD.
+
+6. **Vectorized Inference and Uncertainty Estimation**: For each of the 10,000 test maps, perform a forward pass through the VIB encoder and the CNF. To account for the regressor's uncertainty, perform a Monte Carlo sampling of the latent space $z$ conditioned on the predicted $\hat{\theta}$. Compute the final OoD score as the negative log-likelihood (NLL) of the features, averaged over these samples. Use the variance of the NLL across samples as the `errorbars` in the submission file.
+
+7. **Compute Optimization**: Utilize `torch.cuda.amp` (Automatic Mixed Precision) to accelerate the CNF training and inference. Ensure all data loading uses `mmap_mode='r'` and pre-allocate memory for the 10,000 test maps to avoid fragmentation. Monitor the 1800-second timeout per step; if training exceeds 15 minutes, reduce the number of MAF coupling layers rather than the feature count.
+
+8. **Submission Generation**: Aggregate the NLL scores and uncertainty estimates into the required `submission.json` format. Ensure the order of scores strictly matches the input test file order. Save the final submission as a ZIP file, ensuring the file structure complies with the competition requirements.
+\end{METHODS}
+
+
+###### PROMPT BEGINS ########
+Human: You are provided with a data description, an idea, a research plan to carry out the idea, and some suggestions to improve the research plan. 
+- Your tasks is to improve the current research plan taking into account the suggestions, if they make sense. 
+- Do not write code in the research plan. 
+- Another agent will take your report and will write code according to it. 
+- The research plan should include no more than 8 steps. Each of these steps can have several substeps.
+
+Data description:
+# Data Description: NeurIPS 2025 FAIR Universe Weak Lensing Uncertainty Challenge (Phase 2)
+
+## Objective
+
+**Maximize the leaderboard score on Codabench competition #10902, and produce a scientific paper describing the method and results.**
+
+This is a full research cycle: for each iteration, we (1) develop an OoD detection method, (2) produce a competition submission file, and (3) write a paper describing the approach and findings. The goal is both to achieve the highest possible competition score and to contribute scientifically to the field of simulation-based inference and OoD detection for cosmology.
+
+The task is **out-of-distribution (OoD) detection** on weak gravitational lensing convergence maps. Given 10,000 test maps (mix of in-distribution [InD] and out-of-distribution [OoD]), assign a continuous OoD score t(x_i) ∈ ℝ to each test sample such that OoD samples receive higher scores than InD samples.
+
+**Scoring metric (to maximize):**
+```
+score = (1/100) * sum_i TPR(FPR_i)
+```
+where FPR_i are 100 log-spaced values in [0.001, 0.05]. This is the mean TPR over a partial ROC curve in the low-FPR regime. A perfect classifier scores 1.0; a random classifier scores ~0.05. The metric rewards high OoD detection sensitivity at very low false positive rates (0.1% to 5%).
+
+**Primary deliverable — submission file:** A ZIP file saved at `/home/node/work/weak_lensing_phase2/submission.zip` containing `submission.json` with two keys:
+- `"means"`: list of 10,000 floats (the OoD scores, one per test sample, in the same order as the test file)
+- `"errorbars"`: list of 10,000 floats (uncertainty estimates, can be zeros)
+
+This file must be produced at the end of every analysis run. It is the primary output that will be uploaded to Codabench.
+
+**Secondary deliverable — validation score:** Ground-truth test labels are withheld by Codabench. Use a held-out validation split of the training data (hold out 20% of cosmologies or realizations) to estimate the partial AUC locally. Report this as `val_score` in the results.
+
+**Compute budget — 30 minutes per pipeline step (hard limit).** Each step has a 1800-second timeout. Design for:
+- Feature extraction (all 25,856 training maps): ≤ 10 min
+- Model training (flow, CNN, etc.): ≤ 15 min
+- Test set scoring (10,000 maps): ≤ 5 min
+- Use GPU (device='cuda') wherever possible
+- If a step risks timeout, reduce model complexity or subsample rather than failing
+
+---
+
+## Nature of the OoD Signal — Critical Context
+
+The training data is generated with one specific hydrodynamical simulation code implementing baryonic feedback (AGN feedback, stellar winds, etc.). The OoD test samples are generated with the **same cosmological parameters and same physical model in principle, but using a different hydrodynamical simulation engine** — a different numerical implementation of the same baryonic physics.
+
+This means:
+- The OoD signal is **not** a different cosmology (Ω_m, S_8 values are the same distribution)
+- The OoD signal is **not** the known nuisance parameters (T_AGN, f_0, Δz — these are already varied in training)
+- The OoD signal is a **subtle difference in the non-Gaussian small-scale structure** arising from how different hydro codes implement baryonic feedback numerically
+- The signal is expected to appear primarily at **small scales (high ℓ, baryonic feedback scales ~1-10 arcmin)** — in the non-Gaussian features of the convergence field, not in the Gaussian (power spectrum) part
+- Features sensitive to **higher-order statistics, peak distributions, void statistics, Minkowski functionals, and wavelet/scattering coefficients** are expected to be more discriminative than the power spectrum alone
+- The method must be robust to the known nuisances (T_AGN, f_0, Δz) already present in training — these must NOT trigger false OoD flags
+
+This is a classic **simulation model mismatch** problem: can we detect when the data comes from a different hydro code, given that we only trained on one?
+
+---
+
+## Data Files (all at absolute paths)
+
+### 1. Training convergence maps
+**Path:** `/home/node/work/weak_lensing_phase2/data/public_data/WIDE12H_bin2_2arcmin_kappa_newrealization.npy`
+- **Shape:** `(101, 256, 132019)` — dtype: `float16`
+- 101 cosmological models × 256 systematic realizations × 132,019 valid pixels per map
+- **IMPORTANT:** Data is stored as **flattened valid pixels only** (not full 2D arrays). To reconstruct 2D maps, use the mask (see below):
+  ```python
+  mask = np.load(".../WIDE12H_bin2_2arcmin_mask.npy")  # shape (1424, 176), dtype bool
+  full_map = np.zeros((1424, 176), dtype=np.float32)
+  full_map[mask] = kappa[cosmo_idx, sys_idx].astype(np.float32)
+  ```
+- Training maps are **noiseless**. Gaussian noise must be added before use:
+  ```python
+  ng = 30  # galaxies per arcmin²
+  pixel_size = 2.0  # arcmin
+  noise_sigma = 0.4 / (2 * ng * pixel_size**2)**0.5  # ≈ 0.02582
+  noisy_map = noiseless_map + np.random.randn(*noiseless_map.shape) * noise_sigma * mask
+  ```
+- Memory: 6.8 GB as float16 (as stored), 13.7 GB if cast to float32
+- Convergence range: approximately [-0.05, 0.23]
+
+### 2. Test convergence maps
+**Path:** `/home/node/work/weak_lensing_phase2/data/public_data/WIDE12H_bin2_2arcmin_kappa_test_phase2_test.npy`
+- **Shape:** `(10000, 132019)` — dtype: `float64`
+- 10,000 noisy test maps stored as flattened valid pixels
+- **Already noisy** (noise added with ng=30, pixel_size=2 arcmin)
+- Reconstruct 2D with `full_map[mask] = kappa_test[i]`
+- Memory: 10.6 GB
+- Mix of InD (label=0) and OoD (label=1) — ground truth labels withheld
+
+### 3. Survey mask
+**Path:** `/home/node/work/weak_lensing_phase2/data/public_data/WIDE12H_bin2_2arcmin_mask.npy`
+- **Shape:** `(1424, 176)` — dtype: `bool`
+- 132,019 of 250,624 pixels are valid (52.7%)
+- Apply when adding noise: zero noise outside survey area
+
+### 4. Training labels
+**Path:** `/home/node/work/weak_lensing_phase2/data/public_data/label.npy`
+- **Shape:** `(101, 256, 5)` — dtype: `float64`
+- `[..., 0]` = Ω_m: range [0.091, 0.619], mean 0.290 — cosmological parameter
+- `[..., 1]` = S_8: range [0.680, 0.955], mean 0.814 — cosmological parameter
+- `[..., 2]` = T_AGN ∈ [7.20, 8.50], uniform — **nuisance, marginalize**
+- `[..., 3]` = f_0 ∈ [0.00004, 0.0264], uniform — **nuisance, marginalize**
+- `[..., 4]` = Δz ~ N(0, 0.022) — **nuisance, marginalize**
+- Cosmological parameters vary across 101 cosmologies (axis 0)
+- Nuisance parameters vary across 256 realizations (axis 1)
+
+---
+
+## Key Utility Code
+
+```python
+import numpy as np
+
+DATA_DIR = "/home/node/work/weak_lensing_phase2/data/public_data"
+
+# Load all files
+mask       = np.load(f"{DATA_DIR}/WIDE12H_bin2_2arcmin_mask.npy")           # (1424, 176) bool
+kappa      = np.load(f"{DATA_DIR}/WIDE12H_bin2_2arcmin_kappa_newrealization.npy", mmap_mode='r')  # (101, 256, 132019) float16
+kappa_test = np.load(f"{DATA_DIR}/WIDE12H_bin2_2arcmin_kappa_test_phase2_test.npy", mmap_mode='r')  # (10000, 132019) float64
+label      = np.load(f"{DATA_DIR}/label.npy")                                # (101, 256, 5) float64
+
+# Add noise to a flat training map
+def add_noise(flat_map, mask, ng=30, pixel_size=2.0):
+    noise_sigma = 0.4 / (2 * ng * pixel_size**2)**0.5  # ≈ 0.02582
+    return flat_map + np.random.randn(*flat_map.shape) * noise_sigma * mask[mask]
+
+# Reconstruct 2D map from flat valid pixels
+def to_2d(flat_map, mask):
+    full = np.zeros(mask.shape, dtype=np.float32)
+    full[mask] = flat_map.astype(np.float32)
+    return full  # shape (1424, 176)
+
+# Scoring metric (partial AUC, FPR in [0.001, 0.05])
+from sklearn.metrics import roc_curve
+def score_phase2(test_labels, ood_scores):
+    fpr, tpr, _ = roc_curve(test_labels, ood_scores)
+    fpr_grid = np.logspace(np.log10(0.001), np.log10(0.05), 100)
+    tpr_interp = np.interp(fpr_grid, fpr, tpr)
+    return np.mean(tpr_interp)
+
+# Save submission
+import json, zipfile
+def save_submission(ood_scores, errorbars=None, save_dir="/home/node/work/weak_lensing_phase2"):
+    if errorbars is None:
+        errorbars = [0.0] * len(ood_scores)
+    data = {"means": list(map(float, ood_scores)), "errorbars": list(map(float, errorbars))}
+    json_path = f"{save_dir}/submission.json"
+    zip_path  = f"{save_dir}/submission.zip"
+    with open(json_path, 'w') as f:
+        json.dump(data, f)
+    with zipfile.ZipFile(zip_path, 'w') as zf:
+        zf.write(json_path, "submission.json")
+    return zip_path
+```
+
+### Power spectrum utility (from starting kit)
+```python
+import scipy.stats
+def power_spectrum(x, pixsize, kedge):
+    """Azimuthally averaged 2D power spectrum. x: 2D array, pixsize: pixel size in radians."""
+    assert x.ndim == 2
+    xk = np.fft.rfft2(x)
+    xk2 = (xk * xk.conj()).real
+    Nmesh = x.shape
+    k = np.zeros((Nmesh[0], Nmesh[1]//2+1))
+    k += np.fft.fftfreq(Nmesh[0], d=pixsize).reshape(-1, 1) ** 2
+    k += np.fft.rfftfreq(Nmesh[1], d=pixsize).reshape(1, -1) ** 2
+    k = np.sqrt(k)
+    power, _, _ = scipy.stats.binned_statistic(k.ravel(), xk2.ravel(), statistic='mean', bins=kedge)
+    k_centers, _, _ = scipy.stats.binned_statistic(k.ravel(), k.ravel(), statistic='mean', bins=kedge)
+    norm = x.size * pixsize**2
+    return k_centers, power / norm
+```
+
+---
+
+## Baselines (known to be suboptimal — to be improved upon)
+
+Three baselines from the competition starting kit use power spectrum χ², CNN parameter estimation χ², and autoencoder reconstruction error. All rely on Gaussian or low-dimensional summary statistics and are known to miss the non-Gaussian OoD signal. Any method exploiting higher-order statistics or learned density estimation should substantially outperform them.
+
+---
+
+## Hardware Available
+
+- **CPU:** 32 vCPUs (AMD Threadripper PRO 9995WX), cgroup limit
+- **RAM:** 64 GB (cgroup hard limit) — use mmap_mode='r' and float16 to stay within budget
+- **GPU:** NVIDIA RTX PRO 6000 Blackwell, 97.9 GB VRAM, CUDA 12.8
+- **Python:** `/opt/denario-venv/bin/python3.12`
+- **Installed:** torch 2.11+cu128, torchvision, numpy, scipy, scikit-learn, kymatio (wavelet scattering), zuko (normalizing flows), emcee, h5py, joblib, matplotlib
+
+---
+
+## Important Notes
+
+1. **Data is NOT 2D images in the files.** Stored as 1D arrays of 132,019 valid pixels. Always reconstruct to 2D before 2D operations (FFT, convolutions, scattering transforms).
+
+2. **Training data is noiseless; test data is noisy.** Always add noise to training maps before computing features.
+
+3. **Multiple noise realizations are free.** Add noise with different seeds to augment the training set.
+
+4. **No inter-sample information at test time.** OoD scores must be independent per sample (disqualification rule).
+
+5. **Nuisance parameters must be marginalized.** Methods that flag T_AGN, f_0, or Δz variation as OoD will score poorly. The 256 realizations per cosmology cover this variation fully.
+
+
+Idea:
+**Title: Variational Conditional Scattering-Flow (VCSF) for Robust Baryonic OoD Detection**
+
+To detect subtle inter-code hydrodynamical differences while marginalizing over nuisance parameters, we implement a two-stage pipeline: a Wavelet Scattering Transform (WST) feature extractor followed by a Conditional Normalizing Flow (CNF). We utilize `kymatio` to compute scattering coefficients (scales $1–10$ arcmin) which capture non-Gaussian baryonic signatures while suppressing Gaussian noise. The CNF, implemented as a Masked Autoregressive Flow, is trained on the full 25,856 training maps to learn the conditional density $p(\text{features} | \Omega_m, S_8, T_{AGN}, f_0, \Delta z)$. To meet the 5-minute inference limit, we replace expensive Monte Carlo integration with a lightweight ensemble approach: a pre-trained ResNet-18 regressor predicts the posterior distribution of the five parameters, providing a mean vector $\hat{\theta}$ and an uncertainty covariance $\Sigma$. The final OoD score is the negative log-likelihood $-\log p(\text{features} | \hat{\theta})$, averaged over an ensemble of 5 samples drawn from the regressor's predictive posterior to ensure robustness against nuisance-driven estimation noise. This approach effectively isolates the non-Gaussian structural anomalies caused by hydro-code implementation differences while remaining invariant to the known variance of cosmological and baryonic nuisance parameters.
+
+Current research plan:
+1. **Feature Engineering and Non-Linear Selection**: Compute the Wavelet Scattering Transform (WST) using `kymatio` ($J=3, L=8$) on the reconstructed 2D maps. To avoid the information loss associated with linear dimensionality reduction, retain the full set of scattering coefficients. Use a Random Forest Regressor to rank the importance of these coefficients in predicting the five physical parameters ($\Omega_m, S_8, T_{AGN}, f_0, \Delta z$). Select the top 100 features that exhibit the highest non-linear dependency with the parameters, ensuring that higher-order structural information is preserved.
+
+2. **Variational Information Bottleneck (VIB) Training**: Implement a VIB framework where the feature encoder (a multi-layer perceptron) maps the WST coefficients to a latent representation $z$. Train this encoder to maximize the mutual information between $z$ and the physical parameters $\theta$ while simultaneously minimizing the information $z$ contains about the input features $x$ that is not relevant to $\theta$. This forces the latent space to capture the physical signal while discarding nuisance-driven variance.
+
+3. **Conditional Normalizing Flow (CNF) Architecture**: Replace the PCA-based pipeline with a Masked Autoregressive Flow (MAF) that operates directly on the VIB-compressed latent space. Condition the flow on the predicted parameters $\hat{\theta}$ derived from the VIB encoder. Use 5-8 coupling layers to ensure sufficient capacity to model the non-Gaussian density of the scattering coefficients without exceeding the 15-minute training budget.
+
+4. **Nuisance-Invariance Training**: To ensure the model is robust to nuisance parameters, implement a "Nuisance-Swap" training objective. During training, augment the batch by pairing maps with extreme values of $T_{AGN}$ and $f_0$. Penalize the model if the NLL of these extreme-nuisance samples deviates significantly from the mean NLL of the training distribution. This forces the CNF to learn a density that is invariant to the known range of baryonic feedback parameters.
+
+5. **Validation via Hydro-Swap Proxy**: Replace the synthetic Fourier notch filter with a "Hydro-Swap" validation set. Partition the training data by $T_{AGN}$ and $f_0$ values. Use the subset with the most extreme parameter values as a proxy for OoD samples. Calculate the partial AUC on this subset to verify that the model maintains low NLL scores for extreme InD samples, confirming that the model is not flagging nuisance-driven variance as OoD.
+
+6. **Vectorized Inference and Uncertainty Estimation**: For each of the 10,000 test maps, perform a forward pass through the VIB encoder and the CNF. To account for the regressor's uncertainty, perform a Monte Carlo sampling of the latent space $z$ conditioned on the predicted $\hat{\theta}$. Compute the final OoD score as the negative log-likelihood (NLL) of the features, averaged over these samples. Use the variance of the NLL across samples as the `errorbars` in the submission file.
+
+7. **Compute Optimization**: Utilize `torch.cuda.amp` (Automatic Mixed Precision) to accelerate the CNF training and inference. Ensure all data loading uses `mmap_mode='r'` and pre-allocate memory for the 10,000 test maps to avoid fragmentation. Monitor the 1800-second timeout per step; if training exceeds 15 minutes, reduce the number of MAF coupling layers rather than the feature count.
+
+8. **Submission Generation**: Aggregate the NLL scores and uncertainty estimates into the required `submission.json` format. Ensure the order of scores strictly matches the input test file order. Save the final submission as a ZIP file, ensuring the file structure complies with the competition requirements.
+
+Suggestions:
+
+
+        Suggestion #1:
+        content='1. **Refine the VIB Objective:** In step 2, ensure the VIB loss function explicitly includes a term that penalizes the mutual information between the latent representation $z$ and the nuisance parameters ($T_{AGN}, f_0, \\Delta z$) while maximizing it for the cosmological parameters ($\\Omega_m, S_8$). This "adversarial" or "bottleneck" approach is more direct than relying solely on the CNF to learn invariance.\n\n2. **Address the "Hydro-Swap" Proxy:** In step 5, since you do not have a second hydro code, use the 256 realizations per cosmology to create a "leave-one-realization-out" validation. Specifically, train on a subset of realizations and test on the extreme-nuisance realizations (e.g., $T_{AGN}$ at the 5th and 95th percentiles). This is a more rigorous test of nuisance-invariance than the previous Fourier notch filter.\n\n3. **Simplify the Inference Pipeline:** The current plan to use an ensemble of 5 samples from the regressor\'s posterior (Step 6) is computationally expensive. Given the 5-minute inference limit, consider using a single forward pass with a "point estimate" $\\hat{\\theta}$ from the regressor, but augment the training data with Gaussian noise sampled from the regressor\'s predicted variance $\\Sigma$. This "noise-injection" during training makes the CNF inherently robust to regressor uncertainty without requiring multiple passes at test time.\n\n4. **Feature Selection vs. Dimensionality:** While you are keeping the raw WST features (good), ensure that the Random Forest ranking in Step 1 is performed on the *residuals* of the features after regressing out the cosmological parameters. This ensures you are selecting features that are sensitive to the *non-Gaussian structural differences* (the target signal) rather than features that are simply highly correlated with the cosmological parameters themselves.\n\n5. **Memory Management:** Given the 64GB RAM limit and the use of `kymatio` on 25,856 maps, ensure that the WST coefficients are computed and saved to disk (or a memory-mapped file) in batches. Do not attempt to hold the full set of scattering coefficients for all maps in RAM simultaneously.\n\n6. **Calibration Strategy:** Since you lack ground-truth OoD labels, use the "Nuisance-Swap" validation (Step 5) to calibrate the threshold. Ensure the NLL distribution of the "extreme-nuisance" InD samples is used to set the baseline, so that the model does not trigger false positives on legitimate (but extreme) baryonic feedback variations.' additional_kwargs={} response_metadata={} id='23ff6c0f-60b8-4a02-a53a-b32ec42cd3b5'
+
+
+
+        Suggestion #2:
+        content='1. **Refine the VIB Objective:** In Step 2, ensure the VIB implementation explicitly penalizes the mutual information between the latent representation $z$ and the nuisance parameters ($T_{AGN}, f_0, \\Delta z$) while maximizing it for the cosmological parameters ($\\Omega_m, S_8$). This "adversarial" or "disentangled" VIB approach is more robust than a generic VIB for this specific task.\n\n2. **Address the Regressor Uncertainty:** In Step 6, you mention using the regressor\'s predictive posterior. Given the "Regressor Over-confidence" feedback, ensure that the regressor is trained with a proper uncertainty quantification head (e.g., predicting both mean and variance/aleatoric uncertainty). If the regressor is not well-calibrated, the CNF will be conditioned on biased parameters, leading to false positives. Consider using a simple ensemble of 3-5 regressors to better capture epistemic uncertainty.\n\n3. **Data Augmentation Strategy:** Since the training data is noiseless and the test data is noisy, ensure that the "Nuisance-Swap" training in Step 4 includes noise augmentation. If the model is trained on noiseless extreme-nuisance samples, it might learn to distinguish them from noisy InD samples based on noise levels rather than physical structure. Always apply the `add_noise` function during the Nuisance-Swap training.\n\n4. **Compute Budget Management:** The 1800-second (30-minute) limit is tight. If the VIB + CNF training exceeds this, prioritize the CNF training. The VIB encoder can be pre-trained as a separate, faster step (e.g., 5 minutes) to ensure the CNF has the full 15-25 minutes for convergence.\n\n5. **Validation Metric:** In Step 5, ensure the "Hydro-Swap" proxy uses the *full range* of nuisance parameters available in the training set. Specifically, create a validation split that contains the most extreme 5% of $T_{AGN}$ and $f_0$ values. If your model\'s NLL distribution for these extreme InD samples overlaps significantly with the distribution of "normal" InD samples, you have successfully achieved nuisance invariance.\n\n6. **Submission Robustness:** The `errorbars` in the submission file are requested. Using the variance of the NLL across the Monte Carlo samples (as proposed in Step 6) is a good proxy for uncertainty. Ensure this variance is normalized or scaled appropriately so that it doesn\'t dominate the submission file or cause issues with the competition\'s evaluation script.' additional_kwargs={} response_metadata={} id='b00d754c-b819-4e0a-9b3a-2c5211d84aad'
+
+
+
+        Suggestion #3:
+        content='1. **Refine the VIB Objective:** In Step 2, ensure the VIB implementation explicitly penalizes the mutual information between the latent representation $z$ and the nuisance parameters ($T_{AGN}, f_0, \\Delta z$) while maximizing it for the cosmological parameters ($\\Omega_m, S_8$). This "adversarial" or "bottleneck" approach is more robust than simply hoping the encoder discards nuisance variance.\n2. **Address the "Hydro-Swap" Proxy:** In Step 5, since you only have one hydro simulation engine in the training set, you cannot perform a true "Hydro-Swap." Instead, use the 256 realizations per cosmology to create a "Nuisance-Extreme" validation set. Specifically, hold out the 10% of realizations with the most extreme $T_{AGN}$ and $f_0$ values. If your model assigns high NLL to these extreme InD samples, it is failing the invariance test.\n3. **Simplify the Inference Pipeline:** In Step 6, performing Monte Carlo sampling of the latent space $z$ conditioned on $\\hat{\\theta}$ is computationally expensive. Given the 5-minute inference limit, consider using a **deterministic** mapping from the regressor\'s $\\hat{\\theta}$ to the CNF, but train the CNF with a "Nuisance-Augmented" loss (as mentioned in Step 4) to ensure the density estimation is inherently robust to the regressor\'s residual errors.\n4. **Feature Selection vs. Dimensionality:** In Step 1, while you are removing PCA, be cautious with the "top 100 features" selection. If the non-Gaussian signal is subtle, it might be distributed across many low-importance coefficients. If the CNF training time allows, try training on the full set of WST coefficients first; only prune if you hit the 15-minute training limit.\n5. **Calibration Strategy:** Add a step to calibrate the final NLL scores using the held-out InD validation set. Since the competition metric is a partial AUC (FPR 0.1% to 5%), ensure your calibration maps the NLL distribution such that the 5th percentile of the InD validation set corresponds to a low score, preventing the model from being overly sensitive to the "noise floor" of the InD data.' additional_kwargs={} response_metadata={} id='8257dc06-8204-40be-aee2-64ca676cf499'
+
+
+
+**Respond in this format**:
+
+\\begin{METHODS}
+<METHODS>
+\\end{METHODS}
+
+In <METHODS> put the new research methodology. Reply with the new research methodology, no preamble or comment at the very beginning (e.g. alright team...).
+
+###### PROMPT ENDS ########
+
+\begin{METHODS}
+1. **Feature Engineering and Residual Selection**: Compute the Wavelet Scattering Transform (WST) using `kymatio` ($J=3, L=8$) on reconstructed 2D maps. To manage memory, process maps in batches and save coefficients to disk. Perform a Random Forest regression to predict the five physical parameters ($\Omega_m, S_8, T_{AGN}, f_0, \Delta z$) from the WST coefficients. Calculate the residuals of the WST features after regressing out the cosmological parameters to isolate non-Gaussian structural information. Retain the full set of coefficients unless training time constraints necessitate pruning.
+
+2. **Adversarial Variational Information Bottleneck (VIB)**: Implement a VIB encoder that maps WST coefficients to a latent representation $z$. Define the loss function to maximize mutual information between $z$ and the cosmological parameters ($\Omega_m, S_8$) while simultaneously using an adversarial head to minimize the mutual information between $z$ and the nuisance parameters ($T_{AGN}, f_0, \Delta z$). This forces the latent space to be invariant to baryonic feedback variations.
+
+3. **Conditional Normalizing Flow (CNF) Training**: Train a Masked Autoregressive Flow (MAF) on the VIB-compressed latent space, conditioned on the physical parameters $\hat{\theta}$. Use 5-8 coupling layers. To ensure robustness to regressor uncertainty, augment the training data by injecting Gaussian noise into the conditioning parameters $\hat{\theta}$ based on the regressor's predictive variance. This "noise-injection" makes the CNF inherently robust to estimation errors without requiring expensive Monte Carlo sampling at test time.
+
+4. **Nuisance-Augmented Training**: During CNF training, perform "Nuisance-Swap" augmentation. Pair maps with extreme values of $T_{AGN}$ and $f_0$ (the 5th and 95th percentiles) and apply the `add_noise` function to ensure the model learns to distinguish physical structure from noise-level variations. Penalize the model if the NLL of these extreme-nuisance samples deviates significantly from the mean NLL of the training distribution.
+
+5. **Validation via Nuisance-Extreme Proxy**: Create a validation split by holding out 10% of realizations with the most extreme $T_{AGN}$ and $f_0$ values. Calculate the partial AUC on this subset. If the model assigns high NLL to these extreme InD samples, it is failing the invariance test; adjust the VIB adversarial weight accordingly. Use the NLL distribution of this validation set to calibrate the final scores, ensuring the 5th percentile of InD samples maps to a low OoD score.
+
+6. **Vectorized Inference**: For the 10,000 test maps, perform a single forward pass through the VIB encoder and the CNF using the point-estimate $\hat{\theta}$ from the regressor. Compute the OoD score as the negative log-likelihood (NLL). Use the regressor's predictive variance as a proxy for the `errorbars` in the submission file, ensuring values are scaled to avoid dominating the score.
+
+7. **Compute Optimization**: Utilize `torch.cuda.amp` for mixed-precision training. Ensure all data loading uses `mmap_mode='r'` and pre-allocate memory for test maps. If training exceeds the 15-minute budget, prioritize the CNF convergence by pre-training the VIB encoder as a separate, lightweight step.
+
+8. **Submission Generation**: Aggregate the NLL scores and uncertainty estimates into the required `submission.json` format. Verify that the order of scores strictly matches the input test file order. Save the final submission as a ZIP file, ensuring compliance with the competition's file structure requirements.
+\end{METHODS}
+
