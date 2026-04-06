@@ -1,0 +1,65 @@
+\documentclass[]{article}
+
+\usepackage{amsmath}
+\usepackage{multirow}
+\usepackage{natbib}
+\usepackage{graphicx} 
+
+
+\begin{document}
+
+The results of our analysis are presented in three parts. First, we detail the performance of the parameter regression network, which is essential for conditioning our density model. Second, we evaluate the performance of the full Out-of-Distribution (OoD) detection pipeline on a synthetic validation set to quantify its effectiveness. Finally, we present the distribution of anomaly scores computed for the blind test set.
+
+\subsection{Parameter inference for conditional density estimation}
+A core component of our framework is the ability to marginalize over known physical variations by conditioning our density estimator. To achieve this, we first infer the five physical parameters, $\theta = (\Omega_m, S_8, T_{\rm AGN}, f_0, \Delta z)$, from the 217-dimensional WST feature vector of each map. We trained a Multi-Layer Perceptron (MLP) for this regression task, achieving a final validation Mean Squared Error (MSE) of 0.5316. 
+
+The normalized Root Mean Square Error (RMSE) for each parameter is detailed in Table \ref{tab:rmse}. The cosmological parameters $\Omega_m$ and $S_8$ are inferred with the highest precision, as they govern the large-scale properties of the matter distribution that are strongly captured by the WST. In contrast, the baryonic nuisance parameters, particularly the AGN heating temperature $T_{\rm AGN}$ and the photometric redshift error $\Delta z$, exhibit significantly higher prediction errors. This highlights the intrinsic difficulty of constraining these sub-grid and observational effects from noisy, single-map observations. Nevertheless, this regression step provides a crucial maximum a posteriori point estimate, $\hat{\theta}$, which allows the subsequent density model to account for the expected map structure given its inferred physical state.
+
+\begin{table}[h!]
+\centering
+\caption{Normalized Root Mean Square Error (RMSE) for the parameter regression on the validation set.}
+\label{tab:rmse}
+\begin{tabular}{lc}
+\hline
+\hline
+Parameter & Normalized RMSE \\
+\hline
+$\Omega_m$ & 0.3616 \\
+$S_8$ & 0.5416 \\
+$T_{\rm AGN}$ & 0.8791 \\
+$f_0$ & 0.6684 \\
+$\Delta z$ & 1.0072 \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Validation on synthetic out-of-distribution data}
+To quantitatively evaluate the model's ability to distinguish In-Distribution (InD) from OoD samples, we first tested it on a synthetic validation set. For this test, OoD maps were created by applying a 1.3x rescaling to the noiseless convergence signal of a held-out set of maps, mimicking a significant deviation in baryonic effects. We assess performance using the partial Area Under the Curve (AUC) of the Receiver Operating Characteristic (ROC) curve, focusing on the stringent False Positive Rate (FPR) regime of $[0.001, 0.05]$, where high-confidence detections are critical.
+
+Our method achieves a partial AUC of 0.2223 on this task. For context, a random classifier would yield a score of approximately 0.05 in this FPR range, indicating that our model has a strong capability to identify anomalous maps with high confidence. The partial ROC curve, shown in Figure \ref{fig:roc_curve}, illustrates this performance. The curve rises sharply within the shaded scoring region, confirming that the highest Negative Log-Likelihood (NLL) scores are almost exclusively assigned to the synthetically generated OoD samples. This demonstrates that the model effectively separates the two populations by maintaining a high True Positive Rate (TPR) while incurring a very low rate of false alarms, providing confidence in its application to the blind test set.
+
+\begin{figure}[h!]
+    \centering
+    \includegraphics[width=\linewidth]{../input_files/plots/step_6_roc_curve_20260406_124510.png}
+    \caption{Validation Receiver Operating Characteristic (ROC) curve for the synthetic Out-of-Distribution (OoD) detection task. The curve shows the True Positive Rate (TPR) versus the False Positive Rate (FPR) on a logarithmic scale. The shaded region highlights the critical FPR range of [0.001, 0.05] over which the performance metric is evaluated. The steep rise of the curve within this region indicates that the model effectively identifies OoD samples while maintaining a false alarm rate below 5\%, demonstrating high sensitivity to structural deviations.}
+    \label{fig:roc_curve}
+\end{figure}
+
+\subsection{Out-of-distribution scores on the blind test set}
+Having validated the approach, we applied the full inference pipeline to the 10,000 maps in the blind test set. For each map, we computed an OoD score defined as the NLL evaluated using the parameters $\hat{\theta}$ predicted by the MLP regressor: 
+\begin{equation}
+    \text{OoD Score} = - \log p(\mathbf{x}_{\text{WST}} | \hat{\theta})
+\end{equation}
+The resulting distribution of these scores is presented in Figure \ref{fig:nll_histogram}.
+
+The histogram reveals a bimodal structure. The primary distribution, representing the InD samples, is centered at a median NLL of 87.36, which is consistent with the validation NLL achieved during training (82.1762). This indicates that the bulk of the test set is well-described by our model. Critically, the distribution also exhibits a pronounced, heavy tail extending to extremely high NLL values, with a maximum score of 492,662. As suggested by our synthetic data experiment, this long tail corresponds to a distinct population of maps whose structural features are assigned an exceptionally low probability by our conditional model. These samples are therefore identified as strong OoD candidates, whose features are fundamentally inconsistent with the learned distribution of the fiducial simulation, even after accounting for variations in the five known physical parameters.
+
+\begin{figure}[h!]
+    \centering
+    \includegraphics[width=\linewidth]{../input_files/plots/step_5_nll_histogram_1_20260406_123725.png}
+    \caption{Distribution of the Negative Log-Likelihood (NLL) Out-of-Distribution (OoD) scores evaluated on the 10,000 test maps. The left panel shows that the bulk of the samples are concentrated at low NLL values, consistent with the in-distribution data. The right panel displays the full distribution on a log-log scale, revealing a heavy tail of samples with extremely high NLL scores. This long tail identifies the anomalous OoD maps, whose non-Gaussian small-scale structures are assigned very low probability by the conditional density model.}
+    \label{fig:nll_histogram}
+\end{figure}
+
+\end{document}
+                

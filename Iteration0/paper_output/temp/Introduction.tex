@@ -1,0 +1,20 @@
+\documentclass[]{article}
+
+\usepackage{amsmath}
+\usepackage{multirow}
+\usepackage{natbib}
+\usepackage{graphicx} 
+
+
+\begin{document}
+
+Weak gravitational lensing, the subtle distortion of distant galaxy images by the intervening large-scale structure, is a cornerstone of modern cosmology. As a direct probe of the total matter distribution, it provides exceptionally powerful constraints on fundamental cosmological parameters, such as the total matter density $\Omega_m$ and the amplitude of matter fluctuations $S_8$. Upcoming surveys are poised to map the cosmos with unprecedented precision, ushering in an era where systematic uncertainties, rather than statistical noise, will dominate the error budget. A primary source of such systematics arises from the complex physics of baryons. Processes like feedback from supernovae and Active Galactic Nuclei (AGN) significantly alter the matter distribution on small, non-linear scales, precisely where much of the cosmological information is encoded. Accurately modeling these effects is therefore critical for realizing the full potential of future lensing data.
+
+Our primary tools for modeling the non-linear cosmic web are hydrodynamical simulations. However, different simulation codes, which employ distinct numerical schemes and sub-grid recipes for baryonic physics, often produce statistically different predictions even when initialized with identical cosmological parameters. This inter-code discrepancy introduces a fundamental model uncertainty: an analysis pipeline trained on simulations from one code may yield biased cosmological inferences when applied to observational data that is better described by another. The challenge is to identify when a given weak lensing map exhibits structural features that are inconsistent with the fiducial set of simulations. This can be framed as an Out-of-Distribution (OoD) detection problem, where the anomalous signal is not a simple shift in a known parameter but a subtle, physically-motivated difference in the morphology of non-Gaussian structures.
+
+In this work, we present a data-driven framework to tackle this specific OoD challenge. Our approach is designed to distinguish structural anomalies inherent to different simulation physics from variations caused by known cosmological and baryonic nuisance parameters. The method consists of two main stages. First, we employ the Wavelet Scattering Transform (WST) to compress each weak lensing map into a compact, low-dimensional feature vector. The WST is particularly well-suited for this task as it efficiently captures the multi-scale, non-Gaussian statistics that encode the signatures of baryonic feedback, while simultaneously being robust to the Gaussian observational noise present in the maps. Second, we model the probability distribution of these WST features using a Conditional Normalizing Flow (CNF). By explicitly conditioning the flow on the known physical parameters of the simulations, our model learns the complex, non-linear relationship between these parameters and the resulting map structures. This allows it to account for all expected variations within the fiducial simulation model.
+
+To perform inference on a new, unlabeled map, we first estimate its conditioning parameters from its WST features using a separate neural network regressor. We then compute the map's likelihood under the trained conditional density model. The final OoD score is the negative log-likelihood, which quantifies how improbable the map's observed features are, given our understanding of the in-distribution physics. A high score signifies that the map's structure is anomalous and cannot be explained by simply varying the known cosmological or baryonic parameters, thereby flagging it as a candidate originating from different underlying simulation physics. This framework provides a robust and principled method for identifying such discrepancies, a crucial step towards validating our simulation models and ensuring the accuracy of future cosmological analyses.
+
+\end{document}
+                

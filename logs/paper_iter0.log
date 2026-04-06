@@ -1,0 +1,16 @@
+/opt/denario-venv/lib/python3.12/site-packages/denario/langgraph_agents/paper_module/LaTeX/AAS_keywords.txt
+Found 2 plot files to process....
+Plot files: ['step_5_nll_histogram_1_20260406_123725.png', 'step_6_roc_curve_20260406_124510.png']
+✅...............Keywords generated
+✅✅.................Abstract written
+✅✅...............Captions generated
+✅................Figures generated
+✅.............Introduction written
+✅..................Methods written
+✅..................Results written
+✅..............Conclusions written
+Compiling paper_v1_preliminary...✅✅
+✅..........Refined results written
+Compiling paper_v2_no_citations..✅✅
+Paper written in 4 min 5 sec.
+Cost: $0.371
