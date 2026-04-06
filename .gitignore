@@ -1,0 +1,12 @@
+*.csv
+*.npz
+*.npy
+*.pkl
+*.h5
+*.hdf5
+*.parquet
+*.feather
+__pycache__/
+*.pyc
+.DS_Store
+**/parallel_arxiv_output/
