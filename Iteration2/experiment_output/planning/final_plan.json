@@ -1,0 +1,69 @@
+{
+    "sub_tasks": [
+        {
+            "bullet_points": [
+                "Compute Wavelet Scattering Transform (WST) coefficients (J=4, L=8) for training maps using kymatio.",
+                "Subsample training set if necessary to ensure completion within 1800s; process in small batches to keep RAM < 64 GB.",
+                "Train a Random Forest regressor to predict physical parameters (Omega_m, S_8, T_AGN, f_0, Delta z) from WST coefficients.",
+                "Compute residuals by fitting a linear model from predicted parameters to WST space and subtracting the predicted component to isolate non-Gaussian structural information.",
+                "Save WST residuals and the regressor model to disk."
+            ],
+            "sub_task": "Feature Extraction and Residual Computation",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Implement a 3-layer MLP encoder (hidden: 256, latent: 32-64) and a 2-layer MLP adversarial discriminator.",
+                "Train the VIB encoder on WST residuals with beta=1e-3 for the KL term, capped at 50 epochs.",
+                "Compute and print correlations between latent z and physical parameters on a held-out set to verify nuisance invariance.",
+                "Save the trained VIB encoder weights."
+            ],
+            "sub_task": "Adversarial Variational Information Bottleneck (VIB) Training",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Train a Masked Autoregressive Flow (MAF) on the VIB-compressed latent space, conditioned on standardized physical parameters.",
+                "Use true labels for training map conditioning.",
+                "Implement \"Nuisance-Swap\" augmentation: randomly replace conditioning nuisance parameters of 20% of samples with values drawn from the training distribution.",
+                "Save the trained CNF model."
+            ],
+            "sub_task": "Conditional Normalizing Flow (CNF) Training",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Create a primary validation split by holding out 20% of cosmologies to compute partial AUC.",
+                "Use extreme-nuisance realizations from the remaining 80% of cosmologies as a diagnostic for nuisance invariance.",
+                "Calibrate NLL scores such that the 5th percentile of InD samples maps to a low OoD score.",
+                "Save calibration parameters."
+            ],
+            "sub_task": "Validation and Calibration",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Process 10,000 test maps through the pipeline; print elapsed time after each stage (WST, VIB, CNF).",
+                "Fallback: if WST extraction exceeds 300s, reduce to J=3.",
+                "Compute OoD scores (NLL) and uncertainty estimates; print min, max, mean, and std of scores to check for degeneracy.",
+                "Generate submission.zip containing submission.json."
+            ],
+            "sub_task": "Test Set Inference and Submission Generation",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Draft the Results section with subsections: (1) WST Feature Analysis, (2) VIB Nuisance Marginalization, (3) CNF Density Estimation, (4) OoD Detection Performance, and (5) Score Distribution Analysis.",
+                "Interpret the performance of the VCSF method, citing all quantitative diagnostics (correlations, partial AUC, score statistics) from previous steps.",
+                "Discuss the effectiveness of the VIB-based nuisance marginalization and the overall robustness of the approach."
+            ],
+            "sub_task": "Results Analysis and Paper Drafting",
+            "sub_task_agent": "researcher"
+        }
+    ]
+}

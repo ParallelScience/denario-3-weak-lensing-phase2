@@ -1,0 +1,268 @@
+[
+  {
+    "name": "control_starter",
+    "content": "",
+    "timestamp": "2026-04-06 13:30:00",
+    "cost": {
+      "Agent": [
+        "control_starter"
+      ],
+      "Model": [
+        "gemini-3.1-flash-lite-preview"
+      ],
+      "Cost": [
+        0.0012070000000000002
+      ],
+      "Prompt Tokens": [
+        4750
+      ],
+      "Completion Tokens": [
+        13
+      ],
+      "Total Tokens": [
+        4763
+      ]
+    }
+  },
+  {
+    "name": "_Group_Tool_Executor",
+    "content": "\n**Step number:** 4 out of 6.\n\n**Sub-task:** Validation and Calibration\n\n**Agent in charge of sub-task:** `engineer`\n\n**Instructions:**\n\n- Create a primary validation split by holding out 20% of cosmologies to compute partial AUC.\n- Use extreme-nuisance realizations from the remaining 80% of cosmologies as a diagnostic for nuisance invariance.\n- Calibrate NLL scores such that the 5th percentile of InD samples maps to a low OoD score.\n- Save calibration parameters.\n\n**Status:** in progress \u23f3\n",
+    "timestamp": "2026-04-06 13:30:00",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "engineer",
+    "content": "**Code Explanation:**\n\nThis script performs the validation and calibration step of the pipeline. Since the training dataset only contains in-distribution (InD) samples generated from a single hydrodynamical simulation code, we cannot compute a true partial AUC for out-of-distribution (OoD) detection. Instead, we use the extreme-nuisance realizations (samples with $T_{AGN}$ or $f_0$ in the top or bottom 5 percentiles) as a proxy for OoD samples to test the model's invariance to baryonic feedback variations. \n\nThe script loads the pre-trained Conditional Normalizing Flow (CNF) model and evaluates the Negative Log-Likelihood (NLL) for all training samples. It then splits the data into an 80% training set and a 20% validation set (holding out the last 20 cosmologies). We compute the partial AUC on both sets using the extreme-nuisance samples as the positive class. A partial AUC close to 0.05 (random guessing) indicates that the model successfully marginalizes over the nuisance parameters and does not falsely flag extreme physical variations as OoD. Finally, the script computes calibration parameters (the 5th, 50th, and 95th percentiles of the NLL for normal InD samples) to be used during test set inference, ensuring that the 5th percentile of InD samples maps to a low OoD score. A histogram of the NLL distributions is also generated and saved.\n\n**Python Code:**\n\n```python\nimport sys\nimport os\nimport numpy as np\nimport torch\nimport zuko\nfrom sklearn.metrics import roc_curve\nimport matplotlib.pyplot as plt\nimport time\n\ndef score_phase2(test_labels, ood_scores):\n    \"\"\"\n    Computes the partial AUC in the low False Positive Rate (FPR) regime [0.001, 0.05].\n    \"\"\"\n    fpr, tpr, _ = roc_curve(test_labels, ood_scores)\n    fpr_grid = np.logspace(np.log10(0.001), np.log10(0.05), 100)\n    tpr_interp = np.interp(fpr_grid, fpr, tpr)\n    return np.mean(tpr_interp)\n\nif __name__ == '__main__':\n    data_dir = 'data/'\n    \n    print(\"Loading data and models...\")\n    Z = np.load(os.path.join(data_dir, 'Z_latent.npy'))\n    y_labels = np.load(os.path.join(data_dir, 'y_labels.npy'))\n    y_mean = np.load(os.path.join(data_dir, 'y_mean.npy'))\n    y_std = np.load(os.path.join(data_dir, 'y_std.npy'))\n    \n    if np.isnan(Z).any() or np.isinf(Z).any():\n        Z = np.nan_to_num(Z, nan=0.0, posinf=0.0, neginf=0.0)\n        \n    y_scaled = (y_labels - y_mean) / y_std\n    \n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    \n    latent_dim = Z.shape[1]\n    context_dim = y_labels.shape[1]\n    \n    # Initialize and load the CNF model\n    flow = zuko.flows.MAF(features=latent_dim, context=context_dim, transforms=5, hidden_features=[128, 128])\n    flow.load_state_dict(torch.load(os.path.join(data_dir, 'cnf_model.pth'), map_location=device, weights_only=True))\n    flow = flow.to(device)\n    flow.eval()\n    \n    print(\"Computing NLL for all training samples...\")\n    Z_tensor = torch.tensor(Z, dtype=torch.float32)\n    y_tensor = torch.tensor(y_scaled, dtype=torch.float32)\n    \n    dataset = torch.utils.data.TensorDataset(Z_tensor, y_tensor)\n    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1024, shuffle=False)\n    \n    all_nll = []\n    with torch.no_grad():\n        for batch_Z, batch_y in dataloader:\n            batch_Z = batch_Z.to(device)\n            batch_y = batch_y.to(device)\n            nll = -flow(batch_y).log_prob(batch_Z)\n            all_nll.append(nll.cpu().numpy())\n            \n    all_nll = np.concatenate(all_nll)\n    \n    # Define extreme nuisance mask (top and bottom 5% of T_AGN and f_0)\n    t_agn = y_labels[:, 2]\n    f_0 = y_labels[:, 3]\n    \n    t_agn_p5, t_agn_p95 = np.percentile(t_agn, [5, 95])\n    f_0_p5, f_0_p95 = np.percentile(f_0, [5, 95])\n    \n    extreme_mask = (t_agn < t_agn_p5) | (t_agn > t_agn_p95) | (f_0 < f_0_p5) | (f_0 > f_0_p95)\n    \n    # Split into 80% train, 20% val cosmologies\n    n_cosmo = 101\n    n_sys = 256\n    val_cosmo_start = int(n_cosmo * 0.8)\n    val_start_idx = val_cosmo_start * n_sys\n    \n    train_nll = all_nll[:val_start_idx]\n    train_extreme = extreme_mask[:val_start_idx]\n    \n    val_nll = all_nll[val_start_idx:]\n    val_extreme = extreme_mask[val_start_idx:]\n    \n    print(\"Training set (80%) size: \" + str(len(train_nll)) + \" samples\")\n    print(\"Extreme nuisance samples in training set: \" + str(np.sum(train_extreme)))\n    \n    print(\"Validation set (20%) size: \" + str(len(val_nll)) + \" samples\")\n    print(\"Extreme nuisance samples in validation set: \" + str(np.sum(val_extreme)))\n    \n    # Compute partial AUC on training set (diagnostic)\n    try:\n        p_auc_train = score_phase2(train_extreme.astype(int), train_nll)\n        print(\"Diagnostic Partial AUC (Extreme Nuisance vs Normal) on Training Set (80%): \" + str(round(p_auc_train, 4)))\n    except Exception as e:\n        print(\"Could not compute diagnostic partial AUC: \" + str(e))\n        \n    # Compute partial AUC on validation set\n    try:\n        p_auc_val = score_phase2(val_extreme.astype(int), val_nll)\n        print(\"Validation Partial AUC (Extreme Nuisance vs Normal) on Held-out Set (20%): \" + str(round(p_auc_val, 4)))\n        print(\"  (Note: A value close to 0.05 indicates good nuisance invariance. High values indicate false OoD flagging.)\")\n    except Exception as e:\n        print(\"Could not compute validation partial AUC: \" + str(e))\n        \n    # Calibrate NLL scores\n    # We want the 5th percentile of InD samples to map to a low OoD score\n    # We use the normal samples from the training split for calibration\n    train_normal_nll = train_nll[~train_extreme]\n    \n    nll_p5 = np.percentile(train_normal_nll, 5)\n    nll_median = np.median(train_normal_nll)\n    nll_p95 = np.percentile(train_normal_nll, 95)\n    \n    print(\"\\nCalibration parameters (based on normal InD samples):\")\n    print(\"  5th percentile NLL: \" + str(round(nll_p5, 4)))\n    print(\"  Median NLL: \" + str(round(nll_median, 4)))\n    print(\"  95th percentile NLL: \" + str(round(nll_p95, 4)))\n    \n    np.save(os.path.join(data_dir, 'calibration_params.npy'), np.array([nll_p5, nll_median, nll_p95]))\n    print(\"Calibration parameters saved to data/calibration_params.npy\")\n    \n    # Plot NLL distributions\n    plt.figure(figsize=(10, 6))\n    plt.hist(train_normal_nll, bins=50, alpha=0.5, density=True, label='Normal Nuisance (Train)')\n    plt.hist(train_nll[train_extreme], bins=50, alpha=0.5, density=True, label='Extreme Nuisance (Train)')\n    plt.hist(val_nll[~val_extreme], bins=50, alpha=0.5, density=True, label='Normal Nuisance (Val)')\n    plt.hist(val_nll[val_extreme], bins=50, alpha=0.5, density=True, label='Extreme Nuisance (Val)')\n    plt.xlabel('Negative Log-Likelihood (NLL)')\n    plt.ylabel('Density')\n    plt.title('NLL Distribution: Normal vs Extreme Nuisance')\n    plt.legend()\n    plt.tight_layout()\n    \n    timestamp = int(time.time())\n    plot_filename = \"nll_distribution_1_\" + str(timestamp) + \".png\"\n    plot_filepath = os.path.join(data_dir, plot_filename)\n    plt.savefig(plot_filepath, dpi=300)\n    print(\"Histogram saved to \" + plot_filepath)\n```",
+    "timestamp": "2026-04-06 13:31:24",
+    "cost": {
+      "Agent": [
+        "engineer"
+      ],
+      "Model": [
+        "gemini-3.1-pro-preview"
+      ],
+      "Cost": [
+        0.061942
+      ],
+      "Prompt Tokens": [
+        16631
+      ],
+      "Completion Tokens": [
+        2390
+      ],
+      "Total Tokens": [
+        19021
+      ]
+    }
+  },
+  {
+    "name": "engineer_response_evaluator",
+    "content": "**Code Explanation:**\n\nThis script performs the validation and calibration step of the pipeline. Since the training dataset only contains in-distribution (InD) samples generated from a single hydrodynamical simulation code, we cannot compute a true partial AUC for out-of-distribution (OoD) detection. Instead, we use the extreme-nuisance realizations (samples with T_AGN or f_0 in the top or bottom 5 percentiles) as a proxy for OoD samples to test the model's invariance to baryonic feedback variations. The script loads the pre-trained Conditional Normalizing Flow (CNF) model and evaluates the Negative Log-Likelihood (NLL) for all training samples. It then splits the data into an 80% training set and a 20% validation set (holding out the last 20 cosmologies). We compute the partial AUC on both sets using the extreme-nuisance samples as the positive class. A partial AUC close to 0.05 (random guessing) indicates that the model successfully marginalizes over the nuisance parameters and does not falsely flag extreme physical variations as OoD. Finally, the script computes calibration parameters (the 5th, 50th, and 95th percentiles of the NLL for normal InD samples) to be used during test set inference, ensuring that the 5th percentile of InD samples maps to a low OoD score. A histogram of the NLL distributions is also generated and saved.\n\n**Modifications:**\n\nAdded the required if __name__ == '__main__': block, ensured all file paths use the data/ directory, removed unnecessary imports, and ensured all print statements and file operations follow the specified constraints.\n\n**Python Code:**\n\n```python\n# filename: codebase/step_4.py\nimport sys\nimport os\nsys.path.insert(0, os.path.abspath(\"codebase\"))\nimport numpy as np\nimport torch\nimport zuko\nfrom sklearn.metrics import roc_curve\nimport matplotlib.pyplot as plt\nimport time\n\ndef score_phase2(test_labels, ood_scores):\n    fpr, tpr, _ = roc_curve(test_labels, ood_scores)\n    fpr_grid = np.logspace(np.log10(0.001), np.log10(0.05), 100)\n    tpr_interp = np.interp(fpr_grid, fpr, tpr)\n    return np.mean(tpr_interp)\n\nif __name__ == '__main__':\n    data_dir = 'data/'\n    Z = np.load(os.path.join(data_dir, 'Z_latent.npy'))\n    y_labels = np.load(os.path.join(data_dir, 'y_labels.npy'))\n    y_mean = np.load(os.path.join(data_dir, 'y_mean.npy'))\n    y_std = np.load(os.path.join(data_dir, 'y_std.npy'))\n    if np.isnan(Z).any() or np.isinf(Z).any():\n        Z = np.nan_to_num(Z, nan=0.0, posinf=0.0, neginf=0.0)\n    y_scaled = (y_labels - y_mean) / y_std\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    latent_dim = Z.shape[1]\n    context_dim = y_labels.shape[1]\n    flow = zuko.flows.MAF(features=latent_dim, context=context_dim, transforms=5, hidden_features=[128, 128])\n    flow.load_state_dict(torch.load(os.path.join(data_dir, 'cnf_model.pth'), map_location=device, weights_only=True))\n    flow = flow.to(device)\n    flow.eval()\n    Z_tensor = torch.tensor(Z, dtype=torch.float32)\n    y_tensor = torch.tensor(y_scaled, dtype=torch.float32)\n    dataset = torch.utils.data.TensorDataset(Z_tensor, y_tensor)\n    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1024, shuffle=False)\n    all_nll = []\n    with torch.no_grad():\n        for batch_Z, batch_y in dataloader:\n            batch_Z = batch_Z.to(device)\n            batch_y = batch_y.to(device)\n            nll = -flow(batch_y).log_prob(batch_Z)\n            all_nll.append(nll.cpu().numpy())\n    all_nll = np.concatenate(all_nll)\n    t_agn = y_labels[:, 2]\n    f_0 = y_labels[:, 3]\n    t_agn_p5, t_agn_p95 = np.percentile(t_agn, [5, 95])\n    f_0_p5, f_0_p95 = np.percentile(f_0, [5, 95])\n    extreme_mask = (t_agn < t_agn_p5) | (t_agn > t_agn_p95) | (f_0 < f_0_p5) | (f_0 > f_0_p95)\n    n_cosmo = 101\n    n_sys = 256\n    val_cosmo_start = int(n_cosmo * 0.8)\n    val_start_idx = val_cosmo_start * n_sys\n    train_nll = all_nll[:val_start_idx]\n    train_extreme = extreme_mask[:val_start_idx]\n    val_nll = all_nll[val_start_idx:]\n    val_extreme = extreme_mask[val_start_idx:]\n    try:\n        p_auc_train = score_phase2(train_extreme.astype(int), train_nll)\n        print('Diagnostic Partial AUC: ' + str(round(p_auc_train, 4)))\n    except Exception as e:\n        print('Could not compute diagnostic partial AUC: ' + str(e))\n    try:\n        p_auc_val = score_phase2(val_extreme.astype(int), val_nll)\n        print('Validation Partial AUC: ' + str(round(p_auc_val, 4)))\n    except Exception as e:\n        print('Could not compute validation partial AUC: ' + str(e))\n    train_normal_nll = train_nll[~train_extreme]\n    nll_p5 = np.percentile(train_normal_nll, 5)\n    nll_median = np.median(train_normal_nll)\n    nll_p95 = np.percentile(train_normal_nll, 95)\n    np.save(os.path.join(data_dir, 'calibration_params.npy'), np.array([nll_p5, nll_median, nll_p95]))\n    plt.figure(figsize=(10, 6))\n    plt.hist(train_normal_nll, bins=50, alpha=0.5, density=True, label='Normal Nuisance (Train)')\n    plt.hist(train_nll[train_extreme], bins=50, alpha=0.5, density=True, label='Extreme Nuisance (Train)')\n    plt.xlabel('Negative Log-Likelihood (NLL)')\n    plt.ylabel('Density')\n    plt.title('NLL Distribution: Normal vs Extreme Nuisance')\n    plt.legend()\n    plt.tight_layout()\n    plot_filepath = os.path.join(data_dir, 'nll_distribution_' + str(int(time.time())) + '.png')\n    plt.savefig(plot_filepath, dpi=300)\n    print('Histogram saved to ' + plot_filepath)\n```",
+    "timestamp": "2026-04-06 13:31:33",
+    "cost": {
+      "Agent": [
+        "engineer_response_evaluator"
+      ],
+      "Model": [
+        "gemini-3.1-flash-lite-preview"
+      ],
+      "Cost": [
+        0.0047355
+      ],
+      "Prompt Tokens": [
+        7584
+      ],
+      "Completion Tokens": [
+        1893
+      ],
+      "Total Tokens": [
+        9477
+      ]
+    }
+  },
+  {
+    "name": "executor",
+    "content": "Execution results:\n\nExecution output: \nDiagnostic Partial AUC: 0.0378\nValidation Partial AUC: 0.059\nHistogram saved to data/nll_distribution_1775482295.png\n",
+    "timestamp": "2026-04-06 13:31:36",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "execution_recorder",
+    "content": "Code execution recorded.\n\nExecution output:\nExecution results:\n\nExecution output: \nDiagnostic Partial AUC: 0.0378\nValidation Partial AUC: 0.059\nHistogram saved to data/nll_distribution_1775482295.png\n",
+    "timestamp": "2026-04-06 13:31:36",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "executor_response_evaluator",
+    "content": "",
+    "timestamp": "2026-04-06 13:31:37",
+    "cost": {
+      "Agent": [
+        "executor_response_evaluator"
+      ],
+      "Model": [
+        "gemini-3.1-flash-lite-preview"
+      ],
+      "Cost": [
+        0.0002415
+      ],
+      "Prompt Tokens": [
+        786
+      ],
+      "Completion Tokens": [
+        30
+      ],
+      "Total Tokens": [
+        816
+      ]
+    }
+  },
+  {
+    "name": "_Group_Tool_Executor",
+    "content": "Code execution successful. 1 new image(s) generated.\n\n\nxxxxxxxxxxxxxxxxxxxxxxxxxx\n\nWorkflow status:\n\nPlan step number: 4\n\nAgent for sub-task (might be different from the next agent suggestion for debugging): engineer\n\nStep status (before execution): in progress\n\nCode status: success\n\nxxxxxxxxxxxxxxxxxxxxxxxxxx\n\n\nPlease review the generated images and provide feedback.",
+    "timestamp": "2026-04-06 13:31:37",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "image_reviewer",
+    "content": "[{'type': 'text', 'text': '**Needs Revision:** no\\n\\n**Issues:**\\nNone\\n\\n**Suggestions:**\\nNone\\n\\n**Summary:**\\nThe plot is clear, well-labeled, and correctly shows the requested data. It successfully demonstrates that the NLL distribution for extreme nuisance realizations is very similar to the normal nuisance distribution, indicating good nuisance invariance.', 'extras': {'signature': 'EjQKMgG+Pvb7xHVn8XX8hNk31w3LhB7lyt1HBIxV5nrYNL4ikvnZTcw61eYfmDkXL1bYsCja'}}]",
+    "timestamp": "2026-04-06 13:31:40",
+    "cost": {
+      "Agent": [
+        "image_reviewer"
+      ],
+      "Model": [
+        "gemini-3.1-flash-image-preview"
+      ],
+      "Cost": [
+        0.00035114999999999994
+      ],
+      "Prompt Tokens": [
+        4426
+      ],
+      "Completion Tokens": [
+        64
+      ],
+      "Total Tokens": [
+        4490
+      ]
+    }
+  },
+  {
+    "name": "image_review_recorder",
+    "content": "",
+    "timestamp": "2026-04-06 13:31:41",
+    "cost": {
+      "Agent": [
+        "image_review_recorder"
+      ],
+      "Model": [
+        "gemini-3.1-flash-lite-preview"
+      ],
+      "Cost": [
+        0.00022925000000000002
+      ],
+      "Prompt Tokens": [
+        491
+      ],
+      "Completion Tokens": [
+        71
+      ],
+      "Total Tokens": [
+        562
+      ]
+    }
+  },
+  {
+    "name": "_Group_Tool_Executor",
+    "content": "Image review passed. Step marked as complete.\n\nSummary: The plot is clear, well-labeled, and correctly shows the requested data. It successfully demonstrates that the NLL distribution for extreme nuisance realizations is very similar to the normal nuisance distribution, indicating good nuisance invariance.",
+    "timestamp": "2026-04-06 13:31:41",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "controller",
+    "content": "",
+    "timestamp": "2026-04-06 13:31:43",
+    "cost": {
+      "Agent": [
+        "controller"
+      ],
+      "Model": [
+        "gemini-3.1-flash-lite-preview"
+      ],
+      "Cost": [
+        0.002884
+      ],
+      "Prompt Tokens": [
+        10594
+      ],
+      "Completion Tokens": [
+        157
+      ],
+      "Total Tokens": [
+        10751
+      ]
+    }
+  },
+  {
+    "name": "_Group_Tool_Executor",
+    "content": "\n**Step number:** 5 out of 6.\n\n**Sub-task:** Test Set Inference and Submission Generation\n\n**Agent in charge of sub-task:** `engineer`\n\n**Instructions:**\n\n- Process 10,000 test maps through the pipeline; print elapsed time after each stage (WST, VIB, CNF).\n- Fallback: if WST extraction exceeds 300s, reduce to J=3.\n- Compute OoD scores (NLL) and uncertainty estimates; print min, max, mean, and std of scores to check for degeneracy.\n- Generate submission.zip containing submission.json.\n\n**Step status:** in progress \u23f3\n\n**Code status:** None\n\n**Step iteration:** 2/10\n        ",
+    "timestamp": "2026-04-06 13:31:43",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "terminator",
+    "content": "TERMINATE",
+    "timestamp": "2026-04-06 13:31:43",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  }
+]
