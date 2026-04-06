@@ -1,0 +1,52 @@
+{
+    "sub_tasks": [
+        {
+            "bullet_points": [
+                "Define a 20% held-out validation split by holding out 20 of the 101 cosmological models.",
+                "Implement a batch-processing loop (batch size 32-64) to add noise to training maps (3 independent noise realizations per map) and compute WST coefficients using kymatio (Scattering2D, J=4, L=8) on GPU.",
+                "Average WST features across the 3 noise realizations for each map.",
+                "Compute empirical mean and standard deviation of WST coefficients across the training set for normalization.",
+                "Save the normalized WST features, normalization statistics, and the validation split indices to disk.",
+                "Print the output feature dimensionality."
+            ],
+            "sub_task": "Compute Wavelet Scattering Transform (WST) coefficients for the training set and define the validation split.",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Load the normalized WST features, labels, and validation split.",
+                "Implement a zuko MAF model with at least 8 masked autoregressive transforms, 256 hidden dimensions, and dropout layers (rate ~0.1) between hidden layers.",
+                "Train the flow using negative log-likelihood loss, implementing nuisance-augmentation by resampling nuisance parameters (T_AGN, f_0, Δz) from their priors while keeping cosmological parameters fixed.",
+                "Monitor NLL on the validation set, implement early stopping (patience 10), and save the best model checkpoint.",
+                "Save a diagnostic plot of training and validation loss curves."
+            ],
+            "sub_task": "Train a Masked Autoregressive Flow (MAF) to model the conditional density of WST features.",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Load the test maps and compute their WST features using the normalization statistics from Step 1.",
+                "Perform inference using the trained CNF with MC Dropout (5 forward passes) to estimate mean NLL and epistemic uncertainty.",
+                "Construct synthetic OoD samples from the held-out validation set (e.g., via power spectrum perturbation) to compute the partial AUC validation score.",
+                "Generate the submission.json file and the submission.zip archive.",
+                "Print the validation score and NLL distribution statistics for the InD validation set."
+            ],
+            "sub_task": "Compute OoD scores for the test set and calculate the validation score.",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Report the exact numerical validation score (val_score), WST feature dimensionality, number of training samples, and MAF architecture parameters.",
+                "Discuss the effectiveness of WST in capturing non-Gaussian baryonic signatures and the robustness of the model to nuisance parameter variations.",
+                "Analyze the MC Dropout uncertainty statistics and training/validation NLL values.",
+                "Compare these results against the known baseline scores from the competition starting kit to contextualize the improvement.",
+                "Summarize findings and provide insights into the OoD detection capabilities."
+            ],
+            "sub_task": "Write the Results section of the research report.",
+            "sub_task_agent": "researcher"
+        }
+    ]
+}

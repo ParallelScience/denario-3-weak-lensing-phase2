@@ -1,0 +1,50 @@
+[
+  {
+    "Agent": "control starter",
+    "Cost ($)": 0.00118025,
+    "Prompt Tokens": 4643.0,
+    "Completion Tokens": 13.0,
+    "Total Tokens": 4656.0,
+    "Model": "gemini-3.1-flash-lite-preview"
+  },
+  {
+    "Agent": "controller",
+    "Cost ($)": 0.00716575,
+    "Prompt Tokens": 26527.0,
+    "Completion Tokens": 356.0,
+    "Total Tokens": 26883.0,
+    "Model": "gemini-3.1-flash-lite-preview"
+  },
+  {
+    "Agent": "engineer response evaluator",
+    "Cost ($)": 0.00700425,
+    "Prompt Tokens": 8805.0,
+    "Completion Tokens": 3202.0,
+    "Total Tokens": 12007.0,
+    "Model": "gemini-3.1-flash-lite-preview"
+  },
+  {
+    "Agent": "engineer",
+    "Cost ($)": 0.078384,
+    "Prompt Tokens": 17796.0,
+    "Completion Tokens": 3566.0,
+    "Total Tokens": 21362.0,
+    "Model": "gemini-3.1-pro-preview"
+  },
+  {
+    "Agent": "executor response evaluator",
+    "Cost ($)": 0.00023275,
+    "Prompt Tokens": 751.0,
+    "Completion Tokens": 30.0,
+    "Total Tokens": 781.0,
+    "Model": "gemini-3.1-flash-lite-preview"
+  },
+  {
+    "Agent": "Total",
+    "Cost ($)": 0.093967,
+    "Prompt Tokens": 58522.0,
+    "Completion Tokens": 7167.0,
+    "Total Tokens": 65689.0,
+    "Model": NaN
+  }
+]
