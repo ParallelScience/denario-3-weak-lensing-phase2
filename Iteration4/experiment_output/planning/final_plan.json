@@ -1,0 +1,69 @@
+{
+    "sub_tasks": [
+        {
+            "bullet_points": [
+                "Load all 25,856 training maps using mmap_mode='r'.",
+                "Implement a function to add noise and reconstruct 2D maps, padding them to a square 256x256 shape for kymatio compatibility.",
+                "Compute WST coefficients (J=4, L=8) for all maps and cache the full feature matrix to disk.",
+                "Calculate SNR for each coefficient (ratio of cosmological variance to nuisance-induced variance) and save the indices of the top 100 coefficients."
+            ],
+            "sub_task": "Compute Wavelet Scattering Transform (WST) coefficients for all training maps and perform SNR-based feature selection.",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Load the cached 100-dimensional WST features.",
+                "Train a fully connected MLP with dropout to map WST features to the 5 physical parameters (Omega_m, S_8, T_AGN, f_0, Delta z).",
+                "Implement a dual-head architecture to output the mean vector theta_hat and diagonal covariance Sigma.",
+                "Use Huber loss and save the trained model weights."
+            ],
+            "sub_task": "Train a robust MLP regressor to predict physical parameters from WST features.",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Obtain theta_hat for the training set using the trained MLP.",
+                "Concatenate WST features with theta_hat and train a standard GMM (K in [5, 20] components) on the joint vector.",
+                "Save the GMM parameters and the calibration statistics (mean/std of NLL on training set)."
+            ],
+            "sub_task": "Train a GMM on the joint space of WST features and regressor outputs.",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Implement a Leave-One-Cosmology-Out (LOCO) validation split (20% of cosmologies).",
+                "Construct a synthetic OoD set by applying non-linear pixel-level transformations to a subset of validation maps.",
+                "Compute NLL scores for InD and synthetic OoD maps, calibrate using Z-score normalization, and estimate the partial AUC.",
+                "Save validation results and calibration parameters."
+            ],
+            "sub_task": "Validate the model using a LOCO split and synthetic OoD data.",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Compute WST coefficients for the 10,000 test maps using the saved selection indices.",
+                "Draw 5 samples from the predictive posterior N(theta_hat, Sigma) for each test map and compute the mean NLL and standard deviation (errorbars).",
+                "Generate diagnostic plots: ROC curve, NLL distributions (InD vs. synthetic OoD), and SNR spectrum of WST coefficients.",
+                "Format scores into submission.json and create submission.zip.",
+                "Print all key numerical results (partial AUC, GMM components, calibration stats) for the researcher."
+            ],
+            "sub_task": "Generate OoD scores for test maps and produce diagnostic plots.",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Interpret the performance of the WST-based OoD detection method based on the provided numerical results and diagnostic plots.",
+                "Discuss the effectiveness of marginalizing nuisance parameters via the conditional density approach.",
+                "Summarize the validation scores and the robustness of the method against baryonic feedback variations.",
+                "Provide insights into the non-Gaussian structural anomalies detected by the model, referencing the most discriminative scattering scales."
+            ],
+            "sub_task": "Write the Results section of the research paper.",
+            "sub_task_agent": "researcher"
+        }
+    ]
+}

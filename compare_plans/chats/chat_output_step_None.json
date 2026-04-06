@@ -2,7 +2,7 @@
   {
     "name": "plan_comparator",
     "content": "",
-    "timestamp": "2026-04-06 13:42:24",
+    "timestamp": "2026-04-06 13:57:56",
     "cost": {
       "Agent": [
         "plan_comparator"
@@ -11,23 +11,23 @@
         "gemini-3.1-flash-lite-preview"
       ],
       "Cost": [
-        0.00074675
+        0.00077525
       ],
       "Prompt Tokens": [
-        2321
+        2339
       ],
       "Completion Tokens": [
-        111
+        127
       ],
       "Total Tokens": [
-        2432
+        2466
       ]
     }
   },
   {
     "name": "_Group_Tool_Executor",
-    "content": "Plan comparator decision recorded: reuse=False, restart_at_step=1. The new plan significantly changes the methodology. The old plan used a two-stage approach (VIB for nuisance marginalization followed by CNF), whereas the new plan simplifies this to a direct MAF training on normalized WST features with nuisance augmentation. Additionally, the data processing steps (noise averaging, normalization) are defined differently. Therefore, no steps from the old plan can be reused.",
-    "timestamp": "2026-04-06 13:42:24",
+    "content": "Plan comparator decision recorded: reuse=False, restart_at_step=1. The new plan represents a fundamental shift in the methodology: it replaces the MAF-based conditional density estimation with a two-stage approach involving an MLP regressor for parameter estimation and a GMM for density estimation in the joint feature-parameter space. Additionally, the new plan introduces SNR-based feature selection, which was not part of the original workflow. Since the core architecture and the data processing pipeline have changed significantly, no steps from the old plan can be reused.",
+    "timestamp": "2026-04-06 13:57:56",
     "cost": {
       "Agent": [],
       "Model": [],
@@ -40,7 +40,7 @@
   {
     "name": "terminator",
     "content": "TERMINATE",
-    "timestamp": "2026-04-06 13:42:24",
+    "timestamp": "2026-04-06 13:57:56",
     "cost": {
       "Agent": [],
       "Model": [],
