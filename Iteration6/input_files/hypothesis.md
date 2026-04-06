@@ -1,0 +1,11 @@
+**Title: Multi-Scale Topological Persistence for Robust Baryonic OoD Detection**
+
+Previous iterations successfully utilized Wavelet Scattering Transforms (WST) to capture non-Gaussian small-scale structure, but performance in the low-FPR regime remains limited by the potential loss of information during PCA dimensionality reduction and the reliance on Gaussian-based proxies for validation. 
+
+**Hypothesis:** The hydro-code mismatch manifests as a fundamental change in the connectivity and persistence of high-density peaks and low-density voids in the convergence field. By augmenting the current WST-based feature vector with **Persistent Homology (PH) features**—specifically the Wasserstein distance between the persistence diagrams of the InD training maps and the test maps—we can capture topological signatures of baryonic feedback that are invariant to the specific numerical implementation of the hydro-code. 
+
+**Proposed Method:**
+1. **Topological Feature Extraction:** For each 2D-reconstructed map, compute the 0D and 1D persistence diagrams (birth/death of connected components and loops) using `gudhi` or `ripser`. Summarize these as Persistence Images (PIs) to maintain a fixed-length feature vector.
+2. **Hybrid Feature Fusion:** Concatenate the existing WST coefficients (capturing local texture) with the new PIs (capturing global connectivity).
+3. **Conditional Density Estimation:** Instead of PCA, use a **Variational Autoencoder (VAE) with a Normalizing Flow prior** (e.g., `zuko`'s `NSF`) to learn the joint manifold of WST+PI features conditioned on the nuisance parameters $\{\Omega_m, S_8, T_{AGN}, f_0, \Delta z\}$.
+4. **Inference:** Use the reconstruction error of the VAE combined with the NLL from the flow-based prior as the final OoD score. This dual-metric approach ensures sensitivity to both structural "blurring" (via NLL) and topological "tearing" (via reconstruction error), providing a more robust signal against the subtle non-Gaussian differences inherent in hydro-code mismatches.

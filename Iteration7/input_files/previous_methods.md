@@ -1,0 +1,15 @@
+1. **Feature Extraction and Decorrelation**: Compute the Wavelet Scattering Transform (WST) for all 25,856 training maps using `kymatio` ($J=4, L=8$), processing in batches of 500 to stay within the 64GB RAM limit. Instead of excluding nuisance-sensitive coefficients, perform a whitening transformation on the WST coefficients to minimize mutual information with the nuisance parameters $\{\theta_{nuisance}\}$ while preserving variance associated with cosmological parameters and structural anomalies. Cache these processed features to disk.
+
+2. **Regressor Training**: Train a ResNet-18 regressor on the whitened WST coefficients to predict the five physical parameters $\theta = \{\Omega_m, S_8, T_{AGN}, f_0, \Delta z\}$. This regressor will serve as a fast initialization for the likelihood maximization step, ensuring the search is centered in the correct region of the parameter space.
+
+3. **Conditional Density Estimation**: Implement a Conditional Neural Spline Flow (NSF) using `zuko`. Condition the flow on the five physical parameters $\theta$. Train the flow to learn the conditional density $p(\text{WST}_{\text{whitened}} | \theta)$ using the full training set, applying the `add_noise` function on-the-fly to ensure robustness to the noise levels present in the test set.
+
+4. **Validation Strategy**: Create a validation set containing two distinct components: (a) "Extreme Nuisance" samples (InD) with $T_{AGN} \in [8.5, 8.7]$ to test robustness, and (b) "Structural OoD" samples (e.g., maps with injected high-frequency spatial patterns) to test sensitivity. Calculate the partial AUC on this combined set to ensure the model distinguishes structural mismatch from extreme parameter values.
+
+5. **Maximum Likelihood Inference**: For each test map, compute the OoD score using the Maximum Likelihood estimate of $\theta$. Initialize the search using the ResNet-18 regressor prediction, then perform 10 steps of gradient descent on the log-likelihood $\log p(\text{WST}(x) | \theta)$ with respect to $\theta$ to find the optimal parameter configuration. This approach is more efficient and accurate than a coarse grid search.
+
+6. **Uncertainty Estimation**: Generate `errorbars` by calculating the variance of the log-likelihood values across the optimization trajectory or by evaluating the Hessian of the log-likelihood at the optimal $\theta$. This provides a measure of the model's confidence in the likelihood estimate for each specific map.
+
+7. **Score Calibration and Interpretation**: Normalize the final NLL scores using the median and interquartile range derived from the validation set. For the top 1% of samples identified as OoD, use Integrated Gradients on the NLL output with respect to the WST input features to identify the specific physical scales (arcmin) and scattering orders driving the anomaly.
+
+8. **Submission Generation**: Aggregate the scores and errorbars into the `submission.json` format. Ensure all operations, particularly the gradient-based likelihood maximization, are fully vectorized using PyTorch to guarantee completion within the 5-minute inference time limit.
