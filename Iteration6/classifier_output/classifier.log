@@ -1,0 +1,83 @@
+
+###### PROMPT BEGINS ########
+Human: You are a scientific paper classifier. Your task is to determine the most appropriate top-level arXiv archive for the following paper.
+
+**Paper Title:** Robust Detection of Simulation Mismatch in Weak Lensing Maps with Conditional Scattering-Flows
+
+**Abstract:** The accuracy of cosmological inference from weak lensing maps is limited by subtle, unmodeled differences between hydrodynamical simulation codes. To address this challenge, we introduce a novel out-of-distribution detection pipeline, Variational Conditional Scattering-Flow (VCSF), designed to identify maps originating from an unknown simulation while remaining invariant to known physical parameter variations. Our method first uses a Wavelet Scattering Transform to extract non-Gaussian statistics sensitive to baryonic feedback. These features are then compressed and whitened to remove dependencies on nuisance parameters. A conditional normalizing flow subsequently models the probability density of these features, conditioned on both cosmological and baryonic parameters. Anomaly scores for new maps are calculated as the negative log-likelihood, where the conditioning parameters are efficiently optimized via gradient ascent to maximize the likelihood. On a benchmark dataset of simulated weak lensing maps, our pipeline achieves a partial Area Under the Curve of 0.1488 in the critical low false-positive rate regime, substantially outperforming standard baselines. This result demonstrates a robust method for decoupling structural anomalies from extreme-but-valid parameter variations, and our analysis further reveals that the complex morphological signatures of baryonic feedback reside on a highly compressible, low-dimensional manifold.
+
+**Archives:**
+- astro-ph: Astrophysics — cosmology, galaxies, stellar physics, planetary science, high-energy astrophysics, instrumentation
+- cond-mat: Condensed Matter — materials science, superconductivity, quantum gases, soft matter, statistical mechanics
+- cs: Computer Science — AI, machine learning, NLP, computer vision, algorithms, networking, security, software
+- econ: Economics — econometrics, general economics, theoretical economics
+- eess: Electrical Engineering and Systems Science — signal processing, image/video processing, audio/speech, control
+- gr-qc: General Relativity and Quantum Cosmology — gravitational physics, gravitational waves, black holes
+- hep-ex: High Energy Physics - Experiment — particle physics experiments, collider results
+- hep-lat: High Energy Physics - Lattice — lattice field theory, lattice QCD
+- hep-ph: High Energy Physics - Phenomenology — theoretical particle physics connected to experiment
+- hep-th: High Energy Physics - Theory — string theory, quantum field theory, supersymmetry
+- math: Mathematics — algebra, geometry, topology, analysis, probability, number theory, optimization
+- math-ph: Mathematical Physics — mathematical methods for physics problems
+- nlin: Nonlinear Sciences — chaos, pattern formation, solitons, integrable systems, self-organization
+- nucl-ex: Nuclear Experiment — experimental nuclear physics
+- nucl-th: Nuclear Theory — nuclear structure theory, hadron models, neutron stars
+- physics: Physics (General) — classical, computational, fluid dynamics, optics, plasma, applied, biological, chemical physics
+- q-bio: Quantitative Biology — biomolecules, genomics, neuroscience, populations, quantitative methods
+- q-fin: Quantitative Finance — computational finance, portfolio management, risk, pricing, trading
+- quant-ph: Quantum Physics — quantum information, computation, entanglement, foundations, optics
+- stat: Statistics — methodology, applications, machine learning (with statistical grounding), computation
+
+Select the single most appropriate archive for this paper. If the paper spans multiple fields, choose the one where the paper makes its primary contribution.
+
+###### PROMPT ENDS ########
+
+archive='astro-ph' justification='The paper focuses on cosmological inference and the analysis of weak lensing maps, which are core topics within the astrophysics and cosmology community.'
+###### PROMPT BEGINS ########
+Human: You are a scientific paper classifier. You have already determined that this paper belongs to the **astro-ph** archive on arXiv. Now select the specific subcategory.
+
+**Paper Title:** Robust Detection of Simulation Mismatch in Weak Lensing Maps with Conditional Scattering-Flows
+
+**Abstract:** The accuracy of cosmological inference from weak lensing maps is limited by subtle, unmodeled differences between hydrodynamical simulation codes. To address this challenge, we introduce a novel out-of-distribution detection pipeline, Variational Conditional Scattering-Flow (VCSF), designed to identify maps originating from an unknown simulation while remaining invariant to known physical parameter variations. Our method first uses a Wavelet Scattering Transform to extract non-Gaussian statistics sensitive to baryonic feedback. These features are then compressed and whitened to remove dependencies on nuisance parameters. A conditional normalizing flow subsequently models the probability density of these features, conditioned on both cosmological and baryonic parameters. Anomaly scores for new maps are calculated as the negative log-likelihood, where the conditioning parameters are efficiently optimized via gradient ascent to maximize the likelihood. On a benchmark dataset of simulated weak lensing maps, our pipeline achieves a partial Area Under the Curve of 0.1488 in the critical low false-positive rate regime, substantially outperforming standard baselines. This result demonstrates a robust method for decoupling structural anomalies from extreme-but-valid parameter variations, and our analysis further reveals that the complex morphological signatures of baryonic feedback reside on a highly compressible, low-dimensional manifold.
+
+**Methods (if available):** Our methodology, the Variational Conditional Scattering-Flow (VCSF), is designed to identify weak lensing maps originating from an out-of-distribution (OoD) simulation. The core principle is to learn the conditional probability density of robust, non-Gaussian summary statistics, conditioned on known physical parameters. Anomaly scores are then derived by finding the maximum likelihood of observing a map's statistics under this learned model, effectively marginalizing over the known parameter space.
+
+\subsection{Dataset and OoD proxy}
+The analysis is performed on a dataset of simulated weak lensing convergence maps provided by the NeurIPS 2025 FAIR Universe Weak Lensing Uncertainty Challenge. Each map is a 2D image representing the projected matter density, including observational noise. The training set consists of maps generated from a single hydrodynamical simulation code, with each map corresponding to a specific set of five physical parameters: the cosmological parameters $\Omega_m$ and $S_8$, and three baryonic nuisance parameters controlling Active Galactic Nuclei (AGN) feedback, $T_{AGN}$, $f_0$, and $\Delta z$.
+
+For local validation and performance evaluation, we held out 20\% of the training data (5,376 samples). To simulate the structural anomalies characteristic of simulation mismatch, we created a proxy OoD dataset. This was achieved by applying a Gaussian blur with a standard deviation of $\sigma = 1.5$ pixels to the clean convergence maps before the addition of observational noise. This transformation suppresses the high-frequency, non-Gaussian features that are sensitive to baryonic feedback implementations, mimicking the structural differences between simulation codes while preserving large-scale statistics.
+
+\subsection{Feature extraction and decorrelation}
+The first stage of our pipeline extracts informative summary statistics from the noisy convergence maps using the Wavelet Scattering Transform (WST). The WST is a deep feature extractor that generates translation- and rotation-invariant coefficients by cascading wavelet convolutions with non-linear modulus operators. We employ a scattering network with $J=4$ spatial scales and $L=8$ angular orientations, yielding a 417-dimensional feature vector for each map. The first-order coefficients are analogous to a power spectrum, while the second-order coefficients capture the non-Gaussian cross-scale couplings that are highly sensitive to the morphological signatures of baryonic feedback.
+
+To create a compact and robust feature representation, we apply Principal Component Analysis (PCA) to the 417 WST coefficients. We found that the feature space is highly compressible, with the top 3 principal components capturing 97.35\% of the total variance. This low-dimensional representation forms the basis for our subsequent analysis.
+
+A critical step is to ensure these features are invariant to the known nuisance parameters ($T_{AGN}, f_0, \Delta z$). To achieve this, we perform a whitening transformation. We first compute the intra-cosmology covariance matrix, which isolates the variance driven solely by the nuisance parameters. The inverse square root of this covariance matrix is then applied as a linear transformation to the 3-dimensional PCA features. This process effectively decorrelates the features from the nuisance parameters, ensuring that the final anomaly score is sensitive to structural differences rather than extreme-but-valid baryonic physics within the training distribution.
+
+\subsection{Conditional density estimation and anomaly scoring}
+We model the probability distribution of the 3-dimensional whitened features using a conditional normalizing flow. Specifically, we employ a Conditional Neural Spline Flow (NSF) with 5 transform layers and hidden dimensions of [128, 128]. The flow is trained to learn the conditional probability density $p(\text{features} | \theta)$, where $\theta = \{\Omega_m, S_8, T_{AGN}, f_0, \Delta z\}$ is the five-dimensional vector of physical parameters.
+
+To score a new map $x$, we first compute its whitened WST features, $z_x$. The anomaly score is defined as the minimum Negative Log-Likelihood (NLL) over the entire parameter space:
+\begin{equation}
+    \text{Score}(x) = \min_{\theta} \left[ -\log p(z_x | \theta) \right]
+\end{equation}
+A high score (low maximum likelihood) indicates that no combination of known physical parameters can adequately explain the map's observed features, flagging it as an anomaly.
+
+Solving this optimization problem for thousands of test maps within a strict time budget is computationally challenging. We implement a novel and efficient gradient-based approach. First, a lightweight Multi-Layer Perceptron (MLP) is trained to predict an initial parameter estimate, $\theta_0$, from the features $z_x$. Starting from this $\theta_0$, we then perform 10 steps of gradient descent using the Adam optimizer, directly minimizing the NLL with respect to the conditioning parameters $\theta$. The differentiability of the NSF makes this process efficient. The final anomaly score is the NLL value achieved at the end of this optimization trajectory. This variational approach robustly profiles out the uncertainty in the physical parameters to isolate the evidence for a genuine structural anomaly.
+
+\subsection{Evaluation metrics}
+The primary metric for evaluating our method's performance is the partial Area Under the Curve (pAUC) of the Receiver Operating Characteristic (ROC) curve. The pAUC is calculated as the mean True Positive Rate (TPR) over the low False Positive Rate (FPR) regime, specifically for $\text{FPR} \in [0.001, 0.05]$. This metric heavily penalizes methods that generate false alarms and rewards high sensitivity to true anomalies in the most critical decision-making regime. We also report the full ROC AUC for completeness. Performance is assessed on our local validation set, comparing the scores of the held-out in-distribution maps against the scores of the structural OoD proxy maps (blurred maps).
+
+**Available subcategories in astro-ph:**
+- astro-ph.CO: Cosmology and Nongalactic Astrophysics — Phenomenology of early universe, cosmic microwave background, cosmological parameters, primordial element abundances, extragalactic distance scale, large-scale structure of the universe, dark energy and dark matter.
+- astro-ph.EP: Earth and Planetary Astrophysics — Interplanetary medium, planetary physics, planetary astrobiology, extrasolar planets, solar system formation and evolution, comets, asteroids, meteors.
+- astro-ph.GA: Astrophysics of Galaxies — Phenomena pertaining to galaxies or the Milky Way. Star clusters, HII regions, interstellar medium, molecular clouds, galactic structure, formation and evolution.
+- astro-ph.HE: High Energy Astrophysical Phenomena — Cosmic ray production, acceleration, propagation, detection. Gamma ray astronomy. Supernovae, neutron stars, pulsars, black holes, X-ray binaries, active galactic nuclei.
+- astro-ph.IM: Instrumentation and Methods for Astrophysics — Detector and telescope design, experiment proposals, laboratory astrophysics, data analysis methods, statistical methods, software and simulations.
+- astro-ph.SR: Solar and Stellar Astrophysics — White dwarfs, brown dwarfs, cataclysmic variables. Star formation and protostellar systems. Stellar structure, evolution, nucleosynthesis, atmospheres. The Sun.
+
+Select one primary subcategory and up to 3 secondary subcategories (from any archive) that also apply. The primary must be from the list above. Secondary categories may come from any arXiv category if the paper is interdisciplinary.
+
+###### PROMPT ENDS ########
+
+primary_category='astro-ph.CO' secondary_categories=['astro-ph.IM', 'cs.LG'] justification='The paper focuses on cosmological inference using weak lensing maps (astro-ph.CO), utilizes advanced statistical and machine learning methods for data analysis (astro-ph.IM), and employs conditional normalizing flows and wavelet scattering transforms, which are core topics in machine learning (cs.LG).'

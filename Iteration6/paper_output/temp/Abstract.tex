@@ -1,0 +1,14 @@
+\documentclass[]{article}
+
+\usepackage{amsmath}
+\usepackage{multirow}
+\usepackage{natbib}
+\usepackage{graphicx} 
+
+
+\begin{document}
+
+The accuracy of cosmological inference from weak lensing maps is limited by subtle, unmodeled differences between hydrodynamical simulation codes. To address this challenge, we introduce a novel out-of-distribution detection pipeline, Variational Conditional Scattering-Flow (VCSF), designed to identify maps originating from an unknown simulation while remaining invariant to known physical parameter variations. Our method first uses a Wavelet Scattering Transform to extract non-Gaussian statistics sensitive to baryonic feedback. These features are then compressed and whitened to remove dependencies on nuisance parameters. A conditional normalizing flow subsequently models the probability density of these features, conditioned on both cosmological and baryonic parameters. Anomaly scores for new maps are calculated as the negative log-likelihood, where the conditioning parameters are efficiently optimized via gradient ascent to maximize the likelihood. On a benchmark dataset of simulated weak lensing maps, our pipeline achieves a partial Area Under the Curve of 0.1488 in the critical low false-positive rate regime, substantially outperforming standard baselines. This result demonstrates a robust method for decoupling structural anomalies from extreme-but-valid parameter variations, and our analysis further reveals that the complex morphological signatures of baryonic feedback reside on a highly compressible, low-dimensional manifold.
+
+\end{document}
+                

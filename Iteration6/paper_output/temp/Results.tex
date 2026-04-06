@@ -1,0 +1,55 @@
+\documentclass[]{article}
+
+\usepackage{amsmath}
+\usepackage{multirow}
+\usepackage{natbib}
+\usepackage{graphicx} 
+
+
+\begin{document}
+
+The Variational Conditional Scattering-Flow (VCSF) pipeline is evaluated on a local validation set, comprising 20\% of the original training data. To assess its ability to detect simulation mismatch, we use a proxy out-of-distribution (OoD) dataset created by applying a Gaussian blur to the clean convergence maps. This process mimics the structural differences between hydrodynamical simulation codes by suppressing the high-frequency, non-Gaussian features sensitive to baryonic feedback implementations.
+
+\subsection{Feature extraction and compressibility}
+The first stage of our pipeline extracts robust, non-Gaussian features from the noisy convergence maps using the Wavelet Scattering Transform (WST). This yields a 417-dimensional feature vector for each map, capturing both power-spectrum-like information (first-order coefficients) and the non-Gaussian cross-scale couplings characteristic of baryonic feedback (second-order coefficients).
+
+To create a compact representation, we applied Principal Component Analysis (PCA) to these WST coefficients. We found that the feature space is remarkably compressible: the top 3 principal components alone capture 97.35\% of the total variance in the scattering coefficients (with individual explained variance ratios of 60.67\%, 34.06\%, and 2.62\%). This strong dimensionality reduction suggests that the complex morphological signatures imprinted by both cosmological variations and baryonic feedback reside on a highly constrained, low-dimensional manifold. These 3-dimensional PCA features, after being whitened to remove dependencies on nuisance parameters as described in the Methods section, form the basis for our density estimation.
+
+\subsection{Conditional density estimation}
+The core of our method is a Conditional Neural Spline Flow (NSF) trained to model the probability density of the 3-dimensional whitened features, conditioned on the five physical parameters $\theta = \{\Omega_m, S_8, T_{AGN}, f_0, \Delta z\}$. The training process, shown in Figure \ref{fig:image1}, demonstrates stable and rapid convergence. The model achieved a best validation Negative Log-Likelihood (NLL) of -3.2034 at epoch 9, and training was halted by early stopping at epoch 19. The highly negative NLL values indicate that the flow successfully learned a sharply peaked density distribution, accurately capturing the underlying structure of the in-distribution data.
+
+\begin{figure}[h!]
+    \centering
+    \includegraphics[width=0.5\textwidth]{../input_files/plots/step_3_nsf_training_curve_1_20260406_165827.png}
+    \caption{Training and validation curves for the Conditional Neural Spline Flow (NSF) model, showing the Negative Log-Likelihood (NLL) as a function of epoch. The model exhibits stable convergence, achieving a minimum validation NLL of -3.2034 at epoch 9, which was selected as the best model before early stopping terminated training at epoch 19. The highly negative NLL values indicate that the flow successfully modeled a sharply peaked density distribution for the whitened scattering features.}
+    \label{fig:image1}
+\end{figure}
+
+\subsection{Anomaly detection performance}
+To assign an anomaly score to a new map, we find the set of physical parameters $\theta$ that maximizes its likelihood under the trained NSF model. This is a computationally intensive optimization problem. To solve it efficiently, we first use a lightweight Multi-Layer Perceptron (MLP) to predict an initial parameter estimate, $\theta_0$, from the map's features. As shown in Figure \ref{fig:image0}, this MLP provides a reasonable, albeit not perfect, starting point. From this initialization, we perform 10 steps of gradient ascent to find the parameters that maximize the log-likelihood, with the final value defining our anomaly score.
+
+\begin{figure}[h!]
+    \centering
+    \includegraphics[width=0.5\textwidth]{../input_files/plots/step_2_true_vs_predicted_1_20260406_165701.png}
+    \caption{Performance of the Multi-Layer Perceptron (MLP) regressor used to provide an initial estimate of the physical parameters for the likelihood optimization step. Each panel compares the predicted versus true values for the cosmological parameters ($\Omega\_m$, $S\_8$) and baryonic nuisance parameters ($T\_{AGN}$, $f\_0$, $\Delta z$) on the validation set. The regressor provides a reasonable starting point for the cosmological parameters, which is sufficient for initializing the subsequent gradient-based optimization of the conditional likelihood.}
+    \label{fig:image0}
+\end{figure}
+
+The performance of the full VCSF pipeline is summarized in Figure \ref{fig:image2}. The left panel shows the distributions of the final anomaly scores (NLL) for three groups: standard in-distribution (InD) maps, InD maps with extreme AGN feedback ($T_{AGN} > 8.3$), and the structural OoD proxy maps. There is a clear and significant separation between the scores of the InD maps and the OoD maps. The OoD maps consistently receive much higher NLL scores (lower likelihoods), indicating that the model correctly identifies them as inconsistent with the learned physical model, regardless of the conditioning parameters.
+
+The right panel of Figure \ref{fig:image2} quantifies this separation with a Receiver Operating Characteristic (ROC) curve. The VCSF method achieves a full Area Under the Curve (AUC) of 0.9250. More critically for this task, it achieves a partial AUC (pAUC) of 0.1488 in the low False Positive Rate (FPR) regime of [0.001, 0.05]. This strong performance in the low-FPR region demonstrates the model's high sensitivity to genuine structural anomalies while maintaining a very low rate of false alarms, substantially outperforming typical baseline methods that rely on Gaussian statistics (e.g., power spectrum) or struggle to disentangle structural anomalies from parameter variations.
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=\textwidth]{../input_files/plots/step_4_validation_results_2_20260406_170447.png}
+    \caption{Performance of the Variational Conditional Scattering-Flow (VCSF) method on the validation set. Left: Distributions of the out-of-distribution (OoD) score, defined as the Negative Log-Likelihood, for in-distribution (InD) samples, InD samples with extreme AGN feedback (High T\_AGN), and the structural OoD proxy (Blurred). The clear separation between the InD and OoD distributions highlights the model's sensitivity to structural anomalies, while the overlap of the two InD distributions demonstrates its robustness to baryonic nuisance parameters. Right: The corresponding Receiver Operating Characteristic (ROC) curve achieves a full Area Under the Curve (AUC) of 0.925 and a partial AUC of 0.1488 in the critical low False Positive Rate regime of [0.001, 0.05], confirming the model's strong discriminative power.}
+    \label{fig:image2}
+\end{figure*}
+
+\subsection{Robustness to baryonic nuisance parameters}
+A key design goal of the VCSF pipeline is to remain invariant to variations in known physical parameters, thereby avoiding false positives from maps that are physically plausible but lie at the extremes of the training parameter space. The left panel of Figure \ref{fig:image2} provides strong evidence of this robustness. The distribution of anomaly scores for InD samples with extreme AGN feedback (High $T_{AGN}$, shown in green) is almost perfectly aligned with the distribution for the general InD population (blue).
+
+Quantitatively, the mean NLL score for the standard InD samples is -3.6826, while the mean score for the high-$T_{AGN}$ subset is -3.7734. The fact that these scores are nearly identical—and in stark contrast to the mean OoD score of -0.6947—confirms that our method has successfully learned to marginalize over the nuisance parameter variations. The combination of feature whitening and conditional density modeling allows the VCSF to correctly attribute the structural changes caused by extreme AGN feedback to a known physical effect, rather than flagging them as an anomaly. This ensures that the pipeline is specifically sensitive to structural differences indicative of a true simulation mismatch.
+
+\end{document}
+                

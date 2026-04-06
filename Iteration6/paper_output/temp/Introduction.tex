@@ -1,0 +1,20 @@
+\documentclass[]{article}
+
+\usepackage{amsmath}
+\usepackage{multirow}
+\usepackage{natbib}
+\usepackage{graphicx} 
+
+
+\begin{document}
+
+The coming decade of cosmology promises to map the large-scale structure of the Universe with unprecedented precision, leveraging weak gravitational lensing as a primary observational tool. By analyzing the subtle, coherent distortions of distant galaxy shapes, next-generation surveys will constrain fundamental cosmological parameters, such as the matter density $\Omega_m$ and the amplitude of matter fluctuations $S_8$, to the percent level. However, achieving this potential requires that systematic uncertainties be controlled with commensurate accuracy. As statistical errors shrink, our limited understanding of complex astrophysical processes becomes a critical bottleneck.
+
+A dominant source of such systematic uncertainty stems from baryonic feedback, the collection of processes like star formation and active galactic nuclei (AGN) feedback that redistribute matter within galaxies and clusters. These processes imprint characteristic non-Gaussian signatures on weak lensing maps that can mimic or obscure the subtle effects of cosmological parameters. Hydrodynamical simulations are our primary means of modeling this feedback, yet different simulation codes, even when run with identical initial conditions and cosmological parameters, produce statistically distinct results due to differences in their numerical methods and sub-grid physics implementations. This "simulation mismatch" poses a fundamental challenge: how can we identify if a new observation, or a map from a new simulation, is inconsistent with our established models, without being misled by extreme, yet physically plausible, variations in the known cosmological and baryonic parameters?
+
+This paper frames the detection of simulation mismatch as an out-of-distribution detection problem. The central goal is to develop a method that is highly sensitive to structural anomalies indicative of new physics or differences in simulation code, while remaining invariant to variations within the known parameter space. We introduce a novel pipeline, the Variational Conditional Scattering-Flow, designed to robustly decouple these two sources of variation. Our approach first employs the Wavelet Scattering Transform to extract a set of robust, informative features from weak lensing maps that capture the non-Gaussian statistics characteristic of baryonic feedback. These features are then whitened to remove dependencies on known nuisance parameters, thereby isolating the information most relevant to structural differences.
+
+We then model the probability distribution of these processed features using a conditional normalizing flow, a type of deep generative model. The flow learns the precise conditional density $p(\text{features} | \theta)$, where $\theta$ represents the set of both cosmological and baryonic parameters. To evaluate a new map for anomalies, we treat the problem as one of likelihood maximization: we search for the parameter vector $\theta$ that maximizes the probability of observing the map's features under our learned model. The resulting maximum log-likelihood serves as our anomaly score. A low score signifies that no combination of known physical parameters can adequately explain the map's observed statistics, providing strong evidence that it is an outlier originating from a different underlying physical model. This principled approach allows for the robust identification of genuine structural discrepancies while effectively marginalizing over the uncertainties of known physical parameters.
+
+\end{document}
+                

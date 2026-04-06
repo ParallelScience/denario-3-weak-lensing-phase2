@@ -1,0 +1,38 @@
+\documentclass[]{article}
+
+\usepackage{amsmath}
+\usepackage{multirow}
+\usepackage{natbib}
+\usepackage{graphicx} 
+
+
+\begin{document}
+
+% Auto-generated figures file
+% \usepackage{graphicx}
+
+\begin{figure}[h!]
+    \centering
+    \includegraphics[width=0.5\textwidth]{../input_files/plots/step_2_true_vs_predicted_1_20260406_165701.png}
+    \caption{Performance of the Multi-Layer Perceptron (MLP) regressor used to provide an initial estimate of the physical parameters for the likelihood optimization step. Each panel compares the predicted versus true values for the cosmological parameters ($\Omega\_m$, $S\_8$) and baryonic nuisance parameters ($T\_{AGN}$, $f\_0$, $\Delta z$) on the validation set. The regressor provides a reasonable starting point for the cosmological parameters, which is sufficient for initializing the subsequent gradient-based optimization of the conditional likelihood.}
+    \label{fig:image0}
+\end{figure}
+
+\begin{figure}[h!]
+    \centering
+    \includegraphics[width=0.5\textwidth]{../input_files/plots/step_3_nsf_training_curve_1_20260406_165827.png}
+    \caption{Training and validation curves for the Conditional Neural Spline Flow (NSF) model, showing the Negative Log-Likelihood (NLL) as a function of epoch. The model exhibits stable convergence, achieving a minimum validation NLL of -3.2034 at epoch 9, which was selected as the best model before early stopping terminated training at epoch 19. The highly negative NLL values indicate that the flow successfully modeled a sharply peaked density distribution for the whitened scattering features.}
+    \label{fig:image1}
+\end{figure}
+
+\begin{figure}[h!]
+    \centering
+    \includegraphics[width=0.5\textwidth]{../input_files/plots/step_4_validation_results_2_20260406_170447.png}
+    \caption{Performance of the Variational Conditional Scattering-Flow (VCSF) method on the validation set. Left: Distributions of the out-of-distribution (OoD) score, defined as the Negative Log-Likelihood, for in-distribution (InD) samples, InD samples with extreme AGN feedback (High T\_AGN), and the structural OoD proxy (Blurred). The clear separation between the InD and OoD distributions highlights the model's sensitivity to structural anomalies, while the overlap of the two InD distributions demonstrates its robustness to baryonic nuisance parameters. Right: The corresponding Receiver Operating Characteristic (ROC) curve achieves a full Area Under the Curve (AUC) of 0.925 and a partial AUC of 0.1488 in the critical low False Positive Rate regime of [0.001, 0.05], confirming the model's strong discriminative power.}
+    \label{fig:image2}
+\end{figure}
+
+
+
+\end{document}
+                

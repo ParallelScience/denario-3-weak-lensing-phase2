@@ -1,0 +1,40 @@
+\documentclass[]{article}
+
+\usepackage{amsmath}
+\usepackage{multirow}
+\usepackage{natbib}
+\usepackage{graphicx} 
+
+
+\begin{document}
+
+Our methodology, the Variational Conditional Scattering-Flow (VCSF), is designed to identify weak lensing maps originating from an out-of-distribution (OoD) simulation. The core principle is to learn the conditional probability density of robust, non-Gaussian summary statistics, conditioned on known physical parameters. Anomaly scores are then derived by finding the maximum likelihood of observing a map's statistics under this learned model, effectively marginalizing over the known parameter space.
+
+\subsection{Dataset and OoD proxy}
+The analysis is performed on a dataset of simulated weak lensing convergence maps provided by the NeurIPS 2025 FAIR Universe Weak Lensing Uncertainty Challenge. Each map is a 2D image representing the projected matter density, including observational noise. The training set consists of maps generated from a single hydrodynamical simulation code, with each map corresponding to a specific set of five physical parameters: the cosmological parameters $\Omega_m$ and $S_8$, and three baryonic nuisance parameters controlling Active Galactic Nuclei (AGN) feedback, $T_{AGN}$, $f_0$, and $\Delta z$.
+
+For local validation and performance evaluation, we held out 20\% of the training data (5,376 samples). To simulate the structural anomalies characteristic of simulation mismatch, we created a proxy OoD dataset. This was achieved by applying a Gaussian blur with a standard deviation of $\sigma = 1.5$ pixels to the clean convergence maps before the addition of observational noise. This transformation suppresses the high-frequency, non-Gaussian features that are sensitive to baryonic feedback implementations, mimicking the structural differences between simulation codes while preserving large-scale statistics.
+
+\subsection{Feature extraction and decorrelation}
+The first stage of our pipeline extracts informative summary statistics from the noisy convergence maps using the Wavelet Scattering Transform (WST). The WST is a deep feature extractor that generates translation- and rotation-invariant coefficients by cascading wavelet convolutions with non-linear modulus operators. We employ a scattering network with $J=4$ spatial scales and $L=8$ angular orientations, yielding a 417-dimensional feature vector for each map. The first-order coefficients are analogous to a power spectrum, while the second-order coefficients capture the non-Gaussian cross-scale couplings that are highly sensitive to the morphological signatures of baryonic feedback.
+
+To create a compact and robust feature representation, we apply Principal Component Analysis (PCA) to the 417 WST coefficients. We found that the feature space is highly compressible, with the top 3 principal components capturing 97.35\% of the total variance. This low-dimensional representation forms the basis for our subsequent analysis.
+
+A critical step is to ensure these features are invariant to the known nuisance parameters ($T_{AGN}, f_0, \Delta z$). To achieve this, we perform a whitening transformation. We first compute the intra-cosmology covariance matrix, which isolates the variance driven solely by the nuisance parameters. The inverse square root of this covariance matrix is then applied as a linear transformation to the 3-dimensional PCA features. This process effectively decorrelates the features from the nuisance parameters, ensuring that the final anomaly score is sensitive to structural differences rather than extreme-but-valid baryonic physics within the training distribution.
+
+\subsection{Conditional density estimation and anomaly scoring}
+We model the probability distribution of the 3-dimensional whitened features using a conditional normalizing flow. Specifically, we employ a Conditional Neural Spline Flow (NSF) with 5 transform layers and hidden dimensions of [128, 128]. The flow is trained to learn the conditional probability density $p(\text{features} | \theta)$, where $\theta = \{\Omega_m, S_8, T_{AGN}, f_0, \Delta z\}$ is the five-dimensional vector of physical parameters.
+
+To score a new map $x$, we first compute its whitened WST features, $z_x$. The anomaly score is defined as the minimum Negative Log-Likelihood (NLL) over the entire parameter space:
+\begin{equation}
+    \text{Score}(x) = \min_{\theta} \left[ -\log p(z_x | \theta) \right]
+\end{equation}
+A high score (low maximum likelihood) indicates that no combination of known physical parameters can adequately explain the map's observed features, flagging it as an anomaly.
+
+Solving this optimization problem for thousands of test maps within a strict time budget is computationally challenging. We implement a novel and efficient gradient-based approach. First, a lightweight Multi-Layer Perceptron (MLP) is trained to predict an initial parameter estimate, $\theta_0$, from the features $z_x$. Starting from this $\theta_0$, we then perform 10 steps of gradient descent using the Adam optimizer, directly minimizing the NLL with respect to the conditioning parameters $\theta$. The differentiability of the NSF makes this process efficient. The final anomaly score is the NLL value achieved at the end of this optimization trajectory. This variational approach robustly profiles out the uncertainty in the physical parameters to isolate the evidence for a genuine structural anomaly.
+
+\subsection{Evaluation metrics}
+The primary metric for evaluating our method's performance is the partial Area Under the Curve (pAUC) of the Receiver Operating Characteristic (ROC) curve. The pAUC is calculated as the mean True Positive Rate (TPR) over the low False Positive Rate (FPR) regime, specifically for $\text{FPR} \in [0.001, 0.05]$. This metric heavily penalizes methods that generate false alarms and rewards high sensitivity to true anomalies in the most critical decision-making regime. We also report the full ROC AUC for completeness. Performance is assessed on our local validation set, comparing the scores of the held-out in-distribution maps against the scores of the structural OoD proxy maps (blurred maps).
+
+\end{document}
+                

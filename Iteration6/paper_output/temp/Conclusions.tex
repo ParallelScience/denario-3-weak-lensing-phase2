@@ -1,0 +1,22 @@
+\documentclass[]{article}
+
+\usepackage{amsmath}
+\usepackage{multirow}
+\usepackage{natbib}
+\usepackage{graphicx} 
+
+
+\begin{document}
+
+
+
+Distinguishing genuine structural anomalies in weak lensing maps from extreme variations in known physical parameters is a critical challenge for precision cosmology. This ``simulation mismatch'' problem, where different hydrodynamical simulation codes produce statistically distinct outputs, threatens to introduce systematic biases into cosmological inference. In this paper, we have framed this challenge as an out-of-distribution detection problem and introduced a novel pipeline, the Variational Conditional Scattering-Flow (VCSF), to address it.
+
+Our method is built on a multi-stage process designed to isolate structural discrepancies. We first employ the Wavelet Scattering Transform to extract robust, non-Gaussian summary statistics that are sensitive to the morphological signatures of baryonic feedback. We discovered that these features are highly compressible, with just three principal components capturing over 97\% of the total variance, suggesting that the complex effects of cosmology and baryonic feedback reside on a low-dimensional manifold. These features are then whitened to remove dependencies on known baryonic nuisance parameters. Subsequently, a conditional normalizing flow is trained to learn the precise probability density of these features, conditioned on the full set of five cosmological and baryonic parameters. Anomaly scores for new maps are calculated as the minimum negative log-likelihood, found by efficiently optimizing the conditioning parameters via gradient ascent to maximize the likelihood of observing the map's features.
+
+We evaluated our pipeline on a benchmark dataset, using Gaussian-blurred maps as a proxy for the structural differences characteristic of simulation mismatch. The VCSF method demonstrated excellent discriminative power, achieving a full Area Under the Curve (AUC) of 0.9250 and, more importantly, a partial AUC of 0.1488 in the critical low false-positive rate regime between 0.001 and 0.05. Our results also confirmed the pipeline's robustness to known physical variations; the anomaly scores for maps with extreme, but valid, baryonic feedback parameters were statistically indistinguishable from those of the general in-distribution population.
+
+From these results, we have learned that a principled, likelihood-based approach can successfully decouple structural anomalies from known physical variations. By combining robust feature extraction with conditional density modeling and an efficient variational inference scheme for scoring, the VCSF pipeline provides a powerful and sensitive tool for identifying simulation mismatch. This work not only presents a solution for a pressing systematic in weak lensing cosmology but also highlights the underlying low-dimensional structure of baryonic feedback signatures, paving the way for more robust and reliable cosmological analyses with next-generation surveys.
+
+\end{document}
+                

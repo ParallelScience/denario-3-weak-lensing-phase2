@@ -1,0 +1,7 @@
+Classifier: Step 1 — Determining archive...
+  Archive: astro-ph — The paper focuses on cosmological inference and the analysis of weak lensing maps, which are core topics within the astrophysics and cosmology community.
+Classifier: Step 2 — Determining subcategory within 'astro-ph'...
+  Primary: astro-ph.CO
+  Secondary: astro-ph.IM, cs.LG
+  Justification: The paper focuses on cosmological inference using weak lensing maps (astro-ph.CO), utilizes advanced statistical and machine learning methods for data analysis (astro-ph.IM), and employs conditional normalizing flows and wavelet scattering transforms, which are core topics in machine learning (cs.LG).
+Classification completed in 0 min 3 sec. Cost: $0.0000

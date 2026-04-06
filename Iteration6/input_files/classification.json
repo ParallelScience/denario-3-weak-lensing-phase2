@@ -1,0 +1,8 @@
+{
+  "primary_category": "astro-ph.CO",
+  "secondary_categories": [
+    "astro-ph.IM",
+    "cs.LG"
+  ],
+  "justification": "The paper focuses on cosmological inference using weak lensing maps (astro-ph.CO), utilizes advanced statistical and machine learning methods for data analysis (astro-ph.IM), and employs conditional normalizing flows and wavelet scattering transforms, which are core topics in machine learning (cs.LG)."
+}
