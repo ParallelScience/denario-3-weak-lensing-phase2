@@ -1,0 +1,8 @@
+{
+  "primary_category": "astro-ph.CO",
+  "secondary_categories": [
+    "astro-ph.IM",
+    "cs.LG"
+  ],
+  "justification": "The paper focuses on weak gravitational lensing and large-scale structure (astro-ph.CO), utilizes advanced statistical and simulation-based methods (astro-ph.IM), and employs machine learning techniques like normalizing flows and wavelet scattering transforms (cs.LG)."
+}

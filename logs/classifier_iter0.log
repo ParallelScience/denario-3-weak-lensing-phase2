@@ -1,0 +1,7 @@
+Classifier: Step 1 — Determining archive...
+  Archive: astro-ph — The paper focuses on analyzing weak gravitational lensing maps from hydrodynamical simulations to study baryonic physics and cosmology, which is a core topic in astrophysics.
+Classifier: Step 2 — Determining subcategory within 'astro-ph'...
+  Primary: astro-ph.CO
+  Secondary: astro-ph.IM, cs.LG
+  Justification: The paper focuses on weak gravitational lensing and large-scale structure (astro-ph.CO), utilizes advanced statistical and simulation-based methods (astro-ph.IM), and employs machine learning techniques like normalizing flows and wavelet scattering transforms (cs.LG).
+Classification completed in 0 min 3 sec. Cost: $0.0000
