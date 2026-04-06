@@ -13,3 +13,10 @@
 7. **Submission Generation**: Save the 10,000 NLL scores as `submission.json` with keys `"means"` (NLL values) and `"errorbars"` (zeros). Compress to `/home/node/work/weak_lensing_phase2/submission.zip`.
 
 8. **Scientific Documentation**: Report validation partial AUC, WST feature dimensionality and architecture choices, CNF conditioning strategy, and sensitivity analysis across nuisance parameters. This forms the basis of the scientific paper.
+
+---
+
+**Environment note:** kymatio 0.3.0 has a scipy 1.17 incompatibility (`sph_harm` renamed to `sph_harm_y`). This has been patched in-place at `/opt/denario-venv/lib/python3.12/site-packages/kymatio/scattering3d/filter_bank.py`. If kymatio fails to import with `ImportError: cannot import name 'sph_harm'`, apply this fix before proceeding:
+```bash
+sed -i 's/from scipy.special import sph_harm, factorial/from scipy.special import sph_harm_y as sph_harm, factorial/' /opt/denario-venv/lib/python3.12/site-packages/kymatio/scattering3d/filter_bank.py
+```
