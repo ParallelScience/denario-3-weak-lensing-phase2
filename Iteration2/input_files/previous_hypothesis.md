@@ -1,0 +1,10 @@
+**Title: Multi-Scale Morphological Contrastive Learning (MSM-CL) for OoD Detection**
+
+The current VCSF pipeline relies on the assumption that the conditional density $p(\text{features} | \theta)$ is well-modeled by a MAF. However, the high RMSE in nuisance parameter estimation suggests that the conditioning vector $\hat{\theta}$ is noisy, leading to "leaky" likelihoods where nuisance variance is misidentified as OoD. 
+
+**Hypothesis:** Instead of explicit density estimation conditioned on noisy parameter estimates, we can achieve better separation by learning a contrastive embedding space that explicitly maximizes the distance between different hydro-code realizations while minimizing the distance between samples sharing the same cosmological/nuisance parameters. 
+
+**Proposed Method:**
+1. **Feature Augmentation:** Supplement the WST coefficients with Minkowski Functionals (MFs) and Peak Counts, which are known to be highly sensitive to the small-scale non-Gaussianities induced by baryonic feedback.
+2. **Contrastive Training:** Train a Siamese-style encoder (using a lightweight MLP or 1D-CNN) with a **Triplet Loss** objective. The "anchor" and "positive" samples are different realizations of the same cosmology/nuisance parameters (InD), while "negative" samples are drawn from the training set with different parameters or simulated "baryonic-shifted" maps.
+3. **OoD Scoring:** Replace the NLL score with the **Mahalanobis distance** in the learned embedding space relative to the InD distribution manifold. By training the encoder to be invariant to the nuisance parameters (via the triplet selection strategy), the embedding space will naturally cluster InD samples, making OoD samples (which lack the specific hydro-code "signature" of the training set) appear as outliers in the embedding manifold. This avoids the need for explicit parameter regression, bypassing the error propagation from the noisy MLP regressor used in previous iterations.
