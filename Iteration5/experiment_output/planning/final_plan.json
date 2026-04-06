@@ -1,0 +1,61 @@
+{
+    "sub_tasks": [
+        {
+            "bullet_points": [
+                "Load training maps using mmap_mode='r'.",
+                "Generate 3 noise realizations per training map to augment the dataset.",
+                "Compute WST coefficients (J=4, L=8) for all augmented maps.",
+                "Print the shape of the resulting feature array.",
+                "Standardize features (zero mean, unit variance) and save the scaler parameters (mean, std) along with the features to disk."
+            ],
+            "sub_task": "Pre-compute and standardize Wavelet Scattering Transform (WST) features.",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Load standardized WST features and labels.",
+                "Implement a zuko NSF (8 transforms, 256 hidden dimension).",
+                "Train on the full augmented set, using 10% for validation.",
+                "Print final training/validation losses and save a loss-vs-epoch plot.",
+                "Save the trained model weights."
+            ],
+            "sub_task": "Train a Conditional Neural Spline Flow (NSF).",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Partition data into 80 training and 21 validation cosmologies.",
+                "Re-train the NSF on the 80-cosmology subset.",
+                "Construct synthetic OoD proxies (e.g., Gaussian smoothing/shuffling) for the validation set.",
+                "Compute partial AUC (FPR 0.001–0.05) and save validation metrics and NLL distribution plots."
+            ],
+            "sub_task": "Validate the model using LOCO split and synthetic OoD proxies.",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Load test maps and pre-trained NSF ensemble (3 models).",
+                "Compute WST features for test maps.",
+                "Calculate NLL scores averaged over a 5-sample grid of parameter marginals.",
+                "Compute uncertainty estimates (errorbars) from the ensemble.",
+                "Generate and save submission.zip."
+            ],
+            "sub_task": "Perform inference and generate the final submission.",
+            "sub_task_agent": "engineer",
+            "code_execution_timeout": 1800
+        },
+        {
+            "bullet_points": [
+                "Synthesize findings on higher-order statistics for hydro-code mismatch detection.",
+                "Report: (1) validation partial AUC (with/without nuisance marginalization), (2) NLL distribution plots (InD vs. synthetic OoD), (3) WST coefficient importance, (4) training/validation loss curves, and (5) final submission score.",
+                "Discuss robustness against nuisance parameters and scientific implications."
+            ],
+            "sub_task": "Write the final research report.",
+            "sub_task_agent": "researcher",
+            "code_execution_timeout": 1800
+        }
+    ]
+}

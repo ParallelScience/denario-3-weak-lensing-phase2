@@ -1,0 +1,268 @@
+[
+  {
+    "name": "control_starter",
+    "content": "",
+    "timestamp": "2026-04-06 16:35:15",
+    "cost": {
+      "Agent": [
+        "control_starter"
+      ],
+      "Model": [
+        "gemini-3.1-flash-lite-preview"
+      ],
+      "Cost": [
+        0.0011827500000000002
+      ],
+      "Prompt Tokens": [
+        4557
+      ],
+      "Completion Tokens": [
+        29
+      ],
+      "Total Tokens": [
+        4586
+      ]
+    }
+  },
+  {
+    "name": "_Group_Tool_Executor",
+    "content": "\n**Step number:** 3 out of 5.\n\n**Sub-task:** Validate the model using LOCO split and synthetic OoD proxies.\n\n**Agent in charge of sub-task:** `engineer`\n\n**Instructions:**\n\n- Partition data into 80 training and 21 validation cosmologies.\n- Re-train the NSF on the 80-cosmology subset.\n- Construct synthetic OoD proxies (e.g., Gaussian smoothing/shuffling) for the validation set.\n- Compute partial AUC (FPR 0.001\u20130.05) and save validation metrics and NLL distribution plots.\n\n**Status:** in progress \u23f3\n",
+    "timestamp": "2026-04-06 16:35:15",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "engineer",
+    "content": "**Code Explanation:**\n\nThis script performs a Leave-One-Cosmology-Out (LOCO) validation to evaluate the Out-of-Distribution (OoD) detection capability of the Conditional Neural Spline Flow (NSF). The steps are as follows:\n1. **Data Partitioning**: The pre-computed Wavelet Scattering Transform (WST) features and labels are split into a training set (first 80 cosmologies, 61,440 samples) and an In-Distribution (InD) validation set (last 21 cosmologies, 16,128 samples).\n2. **NSF Re-training**: A new NSF model is trained exclusively on the 80-cosmology subset for 30 epochs to learn the conditional density $p(\\text{WST} | \\theta)$ without seeing the validation cosmologies.\n3. **Synthetic OoD Generation**: To simulate the structural anomalies caused by hydro-code mismatches (which typically affect small-scale baryonic feedback structures), we generate synthetic OoD proxies for the 21 validation cosmologies. We load the raw maps, add noise, and apply a Gaussian blur (kernel size 5, $\\sigma=1.0$) to suppress small-scale power. We then compute the WST features for these blurred maps and scale them using the previously saved scaler.\n4. **Evaluation**: We compute the Negative Log-Likelihood (NLL) scores for both the InD validation features and the synthetic OoD features using the trained NSF. The partial AUC (FPR 0.001\u20130.05) is calculated to quantify the separation between InD and OoD samples.\n5. **Visualization**: A histogram comparing the NLL distributions of InD and OoD samples is generated and saved to disk. Key statistics (mean, std, min, max) and the partial AUC score are printed to the console for the researcher.\n\n**Python Code:**\n\n```python\nimport sys\nimport os\nsys.path.insert(0, os.path.abspath(\"codebase\"))\nimport time\nimport numpy as np\nimport torch\nfrom torch.utils.data import TensorDataset, DataLoader\nimport zuko\nimport matplotlib.pyplot as plt\nfrom sklearn.metrics import roc_curve\nfrom kymatio.torch import Scattering2D\nimport torchvision.transforms.functional as TF\n\nDATA_DIR = \"/home/node/work/weak_lensing_phase2/data/public_data\"\nOUTPUT_DIR = \"data/\"\n\ndef add_noise(flat_map, mask, ng=30, pixel_size=2.0):\n    \"\"\"Adds Gaussian noise to the flattened map based on galaxy density.\"\"\"\n    noise_sigma = 0.4 / (2 * ng * pixel_size**2)**0.5\n    return flat_map + np.random.randn(*flat_map.shape) * noise_sigma * mask[mask]\n\ndef to_2d(flat_map, mask):\n    \"\"\"Reconstructs the 2D map from flattened valid pixels.\"\"\"\n    full = np.zeros(mask.shape, dtype=np.float32)\n    full[mask] = flat_map.astype(np.float32)\n    return full\n\ndef score_phase2(test_labels, ood_scores):\n    \"\"\"Computes the partial AUC metric for FPR in [0.001, 0.05].\"\"\"\n    fpr, tpr, _ = roc_curve(test_labels, ood_scores)\n    fpr_grid = np.logspace(np.log10(0.001), np.log10(0.05), 100)\n    tpr_interp = np.interp(fpr_grid, fpr, tpr)\n    return np.mean(tpr_interp)\n\nif __name__ == '__main__':\n    print(\"Loading features and labels...\")\n    features = np.load(os.path.join(OUTPUT_DIR, \"wst_features_scaled.npy\"))\n    labels = np.load(os.path.join(OUTPUT_DIR, \"wst_labels.npy\"))\n    scaler = np.load(os.path.join(OUTPUT_DIR, \"wst_scaler.npy\"))\n    mean, std = scaler[0], scaler[1]\n    \n    # Partition data: 80 cosmologies for training, 21 for validation\n    n_cosmo_train = 80\n    n_sys = 256\n    n_realizations = 3\n    train_samples = n_cosmo_train * n_sys * n_realizations\n    \n    train_features = features[:train_samples]\n    train_labels = labels[:train_samples]\n    \n    val_features_ind = features[train_samples:]\n    val_labels_ind = labels[train_samples:]\n    \n    print(\"Train samples: \" + str(len(train_features)))\n    print(\"Validation InD samples: \" + str(len(val_features_ind)))\n    \n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    print(\"Using device: \" + str(device))\n    \n    print(\"Initializing NSF for LOCO validation...\")\n    n_features_dim = train_features.shape[1]\n    n_context_dim = train_labels.shape[1]\n    flow = zuko.flows.NSF(features=n_features_dim, context=n_context_dim, transforms=8, hidden_features=[256, 256])\n    flow = flow.to(device)\n    \n    optimizer = torch.optim.Adam(flow.parameters(), lr=0.001)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, factor=0.5)\n    \n    train_dataset = TensorDataset(torch.tensor(train_features, dtype=torch.float32), torch.tensor(train_labels, dtype=torch.float32))\n    batch_size = 1024\n    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)\n    \n    epochs = 30\n    print(\"Training NSF on 80 cosmologies...\")\n    start_time = time.time()\n    for epoch in range(epochs):\n        flow.train()\n        train_loss = 0.0\n        for x, c in train_loader:\n            x, c = x.to(device), c.to(device)\n            loss = -flow(c).log_prob(x).mean()\n            optimizer.zero_grad()\n            loss.backward()\n            torch.nn.utils.clip_grad_norm_(flow.parameters(), 1.0)\n            optimizer.step()\n            train_loss += loss.item() * x.size(0)\n        train_loss /= len(train_loader.dataset)\n        scheduler.step(train_loss)\n        if (epoch + 1) % 5 == 0 or epoch == 0:\n            print(\"Epoch \" + str(epoch + 1) + \"/\" + str(epochs) + \" - Train Loss: \" + str(round(train_loss, 4)))\n            \n    print(\"Training completed in \" + str(round(time.time() - start_time, 2)) + \" seconds.\")\n    \n    print(\"Generating synthetic OoD proxies (Gaussian smoothing) for validation set...\")\n    mask = np.load(os.path.join(DATA_DIR, \"WIDE12H_bin2_2arcmin_mask.npy\"))\n    kappa = np.load(os.path.join(DATA_DIR, \"WIDE12H_bin2_2arcmin_kappa_newrealization.npy\"), mmap_mode='r')\n    label_orig = np.load(os.path.join(DATA_DIR, \"label.npy\"))\n    \n    J = 4\n    L = 8\n    shape = mask.shape\n    scattering = Scattering2D(J=J, L=L, shape=shape)\n    if torch.cuda.is_available():\n        scattering = scattering.cuda()\n        \n    n_cosmo_total = kappa.shape[0]\n    val_cosmo_start = 80\n    \n    ood_features_list = []\n    ood_labels_list = []\n    \n    batch_maps = []\n    batch_labels = []\n    wst_batch_size = 64\n    \n    mask_tensor = torch.tensor(mask, dtype=torch.float32)\n    if torch.cuda.is_available():\n        mask_tensor = mask_tensor.cuda()\n    \n    for c in range(val_cosmo_start, n_cosmo_total):\n        for s in range(n_sys):\n            flat_map = kappa[c, s]\n            lbl = label_orig[c, s]\n            for r in range(n_realizations):\n                noisy_flat = add_noise(flat_map, mask)\n                map_2d = to_2d(noisy_flat, mask)\n                batch_maps.append(map_2d)\n                batch_labels.append(lbl)\n                \n                if len(batch_maps) == wst_batch_size:\n                    batch_tensor = torch.tensor(np.stack(batch_maps), dtype=torch.float32)\n                    if torch.cuda.is_available():\n                        batch_tensor = batch_tensor.cuda()\n                    # Apply Gaussian blur as a proxy for hydro-code mismatch (suppresses small scales)\n                    batch_tensor = batch_tensor.unsqueeze(1)\n                    batch_tensor = TF.gaussian_blur(batch_tensor, kernel_size=5, sigma=1.0)\n                    batch_tensor = batch_tensor.squeeze(1)\n                    batch_tensor = batch_tensor * mask_tensor\n                    with torch.no_grad():\n                        wst_out = scattering(batch_tensor)\n                        wst_features = wst_out.mean(dim=(2, 3)).cpu().numpy()\n                    ood_features_list.append(wst_features)\n                    ood_labels_list.append(np.array(batch_labels))\n                    batch_maps = []\n                    batch_labels = []\n                    \n    if len(batch_maps) > 0:\n        batch_tensor = torch.tensor(np.stack(batch_maps), dtype=torch.float32)\n        if torch.cuda.is_available():\n            batch_tensor = batch_tensor.cuda()\n        batch_tensor = batch_tensor.unsqueeze(1)\n        batch_tensor = TF.gaussian_blur(batch_tensor, kernel_size=5, sigma=1.0)\n        batch_tensor = batch_tensor.squeeze(1)\n        batch_tensor = batch_tensor * mask_tensor\n        with torch.no_grad():\n            wst_out = scattering(batch_tensor)\n            wst_features = wst_out.mean(dim=(2, 3)).cpu().numpy()\n        ood_features_list.append(wst_features)\n        ood_labels_list.append(np.array(batch_labels))\n        \n    val_features_ood = np.vstack(ood_features_list)\n    val_labels_ood = np.vstack(ood_labels_list)\n    \n    # Scale OoD features using the training scaler\n    val_features_ood_scaled = (val_features_ood - mean) / std\n    print(\"Validation OoD samples: \" + str(len(val_features_ood_scaled)))\n    \n    print(\"Computing NLL scores...\")\n    flow.eval()\n    \n    def compute_nll(features_array, labels_array):\n        dataset = TensorDataset(torch.tensor(features_array, dtype=torch.float32), torch.tensor(labels_array, dtype=torch.float32))\n        loader = DataLoader(dataset, batch_size=1024, shuffle=False)\n        nlls = []\n        with torch.no_grad():\n            for x, c in loader:\n                x, c = x.to(device), c.to(device)\n                loss = -flow(c).log_prob(x)\n                nlls.extend(loss.cpu().numpy())\n        return np.array(nlls)\n        \n    nll_ind = compute_nll(val_features_ind, val_labels_ind)\n    nll_ood = compute_nll(val_features_ood_scaled, val_labels_ood)\n    \n    if np.isnan(nll_ind).any() or np.isnan(nll_ood).any():\n        print(\"Warning: NaNs detected in NLL scores. Replacing with max value.\")\n        max_nll = np.nanmax(np.concatenate([nll_ind, nll_ood]))\n        nll_ind = np.nan_to_num(nll_ind, nan=max_nll)\n        nll_ood = np.nan_to_num(nll_ood, nan=max_nll)\n    \n    print(\"InD NLL - Mean: \" + str(round(np.mean(nll_ind), 4)) + \", Std: \" + str(round(np.std(nll_ind), 4)))\n    print(\"InD NLL - Min: \" + str(round(np.min(nll_ind), 4)) + \", Max: \" + str(round(np.max(nll_ind), 4)))\n    print(\"OoD NLL - Mean: \" + str(round(np.mean(nll_ood), 4)) + \", Std: \" + str(round(np.std(nll_ood), 4)))\n    print(\"OoD NLL - Min: \" + str(round(np.min(nll_ood), 4)) + \", Max: \" + str(round(np.max(nll_ood), 4)))\n    \n    y_true = np.concatenate([np.zeros(len(nll_ind)), np.ones(len(nll_ood))])\n    y_scores = np.concatenate([nll_ind, nll_ood])\n    \n    p_auc = score_phase2(y_true, y_scores)\n    print(\"Validation Partial AUC (FPR 0.001-0.05): \" + str(round(p_auc, 4)))\n    \n    # Plot NLL distributions\n    min_val = min(np.percentile(nll_ind, 1), np.percentile(nll_ood, 1))\n    max_val = max(np.percentile(nll_ind, 99), np.percentile(nll_ood, 99))\n    \n    plt.rcParams['text.usetex'] = False\n    plt.figure(figsize=(10, 6))\n    plt.hist(nll_ind, bins=100, range=(min_val, max_val), alpha=0.5, density=True, label='InD (Validation Cosmologies)')\n    plt.hist(nll_ood, bins=100, range=(min_val, max_val), alpha=0.5, density=True, label='OoD (Gaussian Smoothed)')\n    plt.xlabel('Negative Log-Likelihood (NLL)')\n    plt.ylabel('Density')\n    plt.title('NLL Distribution: InD vs Synthetic OoD (LOCO Validation)')\n    plt.legend()\n    plt.grid(True, alpha=0.3)\n    plt.tight_layout()\n    \n    timestamp = int(time.time())\n    plot_path = os.path.join(OUTPUT_DIR, \"nll_distribution_1_\" + str(timestamp) + \".png\")\n    plt.savefig(plot_path, dpi=300)\n    print(\"NLL distribution plot saved to \" + plot_path)\n```",
+    "timestamp": "2026-04-06 16:37:27",
+    "cost": {
+      "Agent": [
+        "engineer"
+      ],
+      "Model": [
+        "gemini-3.1-pro-preview"
+      ],
+      "Cost": [
+        0.074784
+      ],
+      "Prompt Tokens": [
+        15312
+      ],
+      "Completion Tokens": [
+        3680
+      ],
+      "Total Tokens": [
+        18992
+      ]
+    }
+  },
+  {
+    "name": "engineer_response_evaluator",
+    "content": "**Code Explanation:**\n\nThis script performs a Leave-One-Cosmology-Out (LOCO) validation to evaluate the Out-of-Distribution (OoD) detection capability of the Conditional Neural Spline Flow (NSF). The steps are as follows: 1. Data Partitioning: The pre-computed Wavelet Scattering Transform (WST) features and labels are split into a training set (first 80 cosmologies, 61,440 samples) and an In-Distribution (InD) validation set (last 21 cosmologies, 16,128 samples). 2. NSF Re-training: A new NSF model is trained exclusively on the 80-cosmology subset for 30 epochs to learn the conditional density p(WST | theta) without seeing the validation cosmologies. 3. Synthetic OoD Generation: To simulate the structural anomalies caused by hydro-code mismatches (which typically affect small-scale baryonic feedback structures), we generate synthetic OoD proxies for the 21 validation cosmologies. We load the raw maps, add noise, and apply a Gaussian blur (kernel size 5, sigma=1.0) to suppress small-scale power. We then compute the WST features for these blurred maps and scale them using the previously saved scaler. 4. Evaluation: We compute the Negative Log-Likelihood (NLL) scores for both the InD validation features and the synthetic OoD features using the trained NSF. The partial AUC (FPR 0.001\u20130.05) is calculated to quantify the separation between InD and OoD samples. 5. Visualization: A histogram comparing the NLL distributions of InD and OoD samples is generated and saved to disk. Key statistics (mean, std, min, max) and the partial AUC score are printed to the console for the researcher.\n\n**Modifications:**\n\nAdded if __name__ == '__main__': block, ensured all paths use the data/ directory, removed LaTeX rendering, and fixed relative imports.\n\n**Python Code:**\n\n```python\n# filename: codebase/step_3.py\nimport sys\nimport os\nsys.path.insert(0, os.path.abspath(\"codebase\"))\nimport time\nimport numpy as np\nimport torch\nfrom torch.utils.data import TensorDataset, DataLoader\nimport zuko\nimport matplotlib.pyplot as plt\nfrom sklearn.metrics import roc_curve\nfrom kymatio.torch import Scattering2D\nimport torchvision.transforms.functional as TF\nimport os\n\nDATA_DIR = \"/home/node/work/weak_lensing_phase2/data/public_data\"\nOUTPUT_DIR = \"data/\"\n\ndef add_noise(flat_map, mask, ng=30, pixel_size=2.0):\n    noise_sigma = 0.4 / (2 * ng * pixel_size**2)**0.5\n    return flat_map + np.random.randn(*flat_map.shape) * noise_sigma * mask[mask]\n\ndef to_2d(flat_map, mask):\n    full = np.zeros(mask.shape, dtype=np.float32)\n    full[mask] = flat_map.astype(np.float32)\n    return full\n\ndef score_phase2(test_labels, ood_scores):\n    fpr, tpr, _ = roc_curve(test_labels, ood_scores)\n    fpr_grid = np.logspace(np.log10(0.001), np.log10(0.05), 100)\n    tpr_interp = np.interp(fpr_grid, fpr, tpr)\n    return np.mean(tpr_interp)\n\nif __name__ == '__main__':\n    print(\"Loading features and labels...\")\n    features = np.load(os.path.join(OUTPUT_DIR, \"wst_features_scaled.npy\"))\n    labels = np.load(os.path.join(OUTPUT_DIR, \"wst_labels.npy\"))\n    scaler = np.load(os.path.join(OUTPUT_DIR, \"wst_scaler.npy\"))\n    mean, std = scaler[0], scaler[1]\n    n_cosmo_train = 80\n    n_sys = 256\n    n_realizations = 3\n    train_samples = n_cosmo_train * n_sys * n_realizations\n    train_features = features[:train_samples]\n    train_labels = labels[:train_samples]\n    val_features_ind = features[train_samples:]\n    val_labels_ind = labels[train_samples:]\n    print(\"Train samples: \" + str(len(train_features)))\n    print(\"Validation InD samples: \" + str(len(val_features_ind)))\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    print(\"Using device: \" + str(device))\n    print(\"Initializing NSF for LOCO validation...\")\n    n_features_dim = train_features.shape[1]\n    n_context_dim = train_labels.shape[1]\n    flow = zuko.flows.NSF(features=n_features_dim, context=n_context_dim, transforms=8, hidden_features=[256, 256])\n    flow = flow.to(device)\n    optimizer = torch.optim.Adam(flow.parameters(), lr=0.001)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, factor=0.5)\n    train_dataset = TensorDataset(torch.tensor(train_features, dtype=torch.float32), torch.tensor(train_labels, dtype=torch.float32))\n    batch_size = 1024\n    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)\n    epochs = 30\n    print(\"Training NSF on 80 cosmologies...\")\n    start_time = time.time()\n    for epoch in range(epochs):\n        flow.train()\n        train_loss = 0.0\n        for x, c in train_loader:\n            x, c = x.to(device), c.to(device)\n            loss = -flow(c).log_prob(x).mean()\n            optimizer.zero_grad()\n            loss.backward()\n            torch.nn.utils.clip_grad_norm_(flow.parameters(), 1.0)\n            optimizer.step()\n            train_loss += loss.item() * x.size(0)\n        train_loss /= len(train_loader.dataset)\n        scheduler.step(train_loss)\n        if (epoch + 1) % 5 == 0 or epoch == 0:\n            print(\"Epoch \" + str(epoch + 1) + \"/\" + str(epochs) + \" - Train Loss: \" + str(round(train_loss, 4)))\n    print(\"Training completed in \" + str(round(time.time() - start_time, 2)) + \" seconds.\")\n    print(\"Generating synthetic OoD proxies (Gaussian smoothing) for validation set...\")\n    mask = np.load(os.path.join(DATA_DIR, \"WIDE12H_bin2_2arcmin_mask.npy\"))\n    kappa = np.load(os.path.join(DATA_DIR, \"WIDE12H_bin2_2arcmin_kappa_newrealization.npy\"), mmap_mode='r')\n    label_orig = np.load(os.path.join(DATA_DIR, \"label.npy\"))\n    J = 4\n    L = 8\n    shape = mask.shape\n    scattering = Scattering2D(J=J, L=L, shape=shape)\n    if torch.cuda.is_available():\n        scattering = scattering.cuda()\n    n_cosmo_total = kappa.shape[0]\n    val_cosmo_start = 80\n    ood_features_list = []\n    ood_labels_list = []\n    batch_maps = []\n    batch_labels = []\n    wst_batch_size = 64\n    mask_tensor = torch.tensor(mask, dtype=torch.float32)\n    if torch.cuda.is_available():\n        mask_tensor = mask_tensor.cuda()\n    for c in range(val_cosmo_start, n_cosmo_total):\n        for s in range(n_sys):\n            flat_map = kappa[c, s]\n            lbl = label_orig[c, s]\n            for r in range(n_realizations):\n                noisy_flat = add_noise(flat_map, mask)\n                map_2d = to_2d(noisy_flat, mask)\n                batch_maps.append(map_2d)\n                batch_labels.append(lbl)\n                if len(batch_maps) == wst_batch_size:\n                    batch_tensor = torch.tensor(np.stack(batch_maps), dtype=torch.float32)\n                    if torch.cuda.is_available():\n                        batch_tensor = batch_tensor.cuda()\n                    batch_tensor = batch_tensor.unsqueeze(1)\n                    batch_tensor = TF.gaussian_blur(batch_tensor, kernel_size=5, sigma=1.0)\n                    batch_tensor = batch_tensor.squeeze(1)\n                    batch_tensor = batch_tensor * mask_tensor\n                    with torch.no_grad():\n                        wst_out = scattering(batch_tensor)\n                        wst_features = wst_out.mean(dim=(2, 3)).cpu().numpy()\n                    ood_features_list.append(wst_features)\n                    ood_labels_list.append(np.array(batch_labels))\n                    batch_maps = []\n                    batch_labels = []\n    if len(batch_maps) > 0:\n        batch_tensor = torch.tensor(np.stack(batch_maps), dtype=torch.float32)\n        if torch.cuda.is_available():\n            batch_tensor = batch_tensor.cuda()\n        batch_tensor = batch_tensor.unsqueeze(1)\n        batch_tensor = TF.gaussian_blur(batch_tensor, kernel_size=5, sigma=1.0)\n        batch_tensor = batch_tensor.squeeze(1)\n        batch_tensor = batch_tensor * mask_tensor\n        with torch.no_grad():\n            wst_out = scattering(batch_tensor)\n            wst_features = wst_out.mean(dim=(2, 3)).cpu().numpy()\n        ood_features_list.append(wst_features)\n        ood_labels_list.append(np.array(batch_labels))\n    val_features_ood = np.vstack(ood_features_list)\n    val_labels_ood = np.vstack(ood_labels_list)\n    val_features_ood_scaled = (val_features_ood - mean) / std\n    print(\"Validation OoD samples: \" + str(len(val_features_ood_scaled)))\n    print(\"Computing NLL scores...\")\n    flow.eval()\n    def compute_nll(features_array, labels_array):\n        dataset = TensorDataset(torch.tensor(features_array, dtype=torch.float32), torch.tensor(labels_array, dtype=torch.float32))\n        loader = DataLoader(dataset, batch_size=1024, shuffle=False)\n        nlls = []\n        with torch.no_grad():\n            for x, c in loader:\n                x, c = x.to(device), c.to(device)\n                loss = -flow(c).log_prob(x)\n                nlls.extend(loss.cpu().numpy())\n        return np.array(nlls)\n    nll_ind = compute_nll(val_features_ind, val_labels_ind)\n    nll_ood = compute_nll(val_features_ood_scaled, val_labels_ood)\n    if np.isnan(nll_ind).any() or np.isnan(nll_ood).any():\n        print(\"Warning: NaNs detected in NLL scores. Replacing with max value.\")\n        max_nll = np.nanmax(np.concatenate([nll_ind, nll_ood]))\n        nll_ind = np.nan_to_num(nll_ind, nan=max_nll)\n        nll_ood = np.nan_to_num(nll_ood, nan=max_nll)\n    print(\"InD NLL - Mean: \" + str(round(np.mean(nll_ind), 4)) + \", Std: \" + str(round(np.std(nll_ind), 4)))\n    print(\"InD NLL - Min: \" + str(round(np.min(nll_ind), 4)) + \", Max: \" + str(round(np.max(nll_ind), 4)))\n    print(\"OoD NLL - Mean: \" + str(round(np.mean(nll_ood), 4)) + \", Std: \" + str(round(np.std(nll_ood), 4)))\n    print(\"OoD NLL - Min: \" + str(round(np.min(nll_ood), 4)) + \", Max: \" + str(round(np.max(nll_ood), 4)))\n    y_true = np.concatenate([np.zeros(len(nll_ind)), np.ones(len(nll_ood))])\n    y_scores = np.concatenate([nll_ind, nll_ood])\n    p_auc = score_phase2(y_true, y_scores)\n    print(\"Validation Partial AUC (FPR 0.001-0.05): \" + str(round(p_auc, 4)))\n    min_val = min(np.percentile(nll_ind, 1), np.percentile(nll_ood, 1))\n    max_val = max(np.percentile(nll_ind, 99), np.percentile(nll_ood, 99))\n    plt.rcParams['text.usetex'] = False\n    plt.figure(figsize=(10, 6))\n    plt.hist(nll_ind, bins=100, range=(min_val, max_val), alpha=0.5, density=True, label='InD (Validation Cosmologies)')\n    plt.hist(nll_ood, bins=100, range=(min_val, max_val), alpha=0.5, density=True, label='OoD (Gaussian Smoothed)')\n    plt.xlabel('Negative Log-Likelihood (NLL)')\n    plt.ylabel('Density')\n    plt.title('NLL Distribution: InD vs Synthetic OoD (LOCO Validation)')\n    plt.legend()\n    plt.grid(True, alpha=0.3)\n    plt.tight_layout()\n    timestamp = int(time.time())\n    plot_path = os.path.join(OUTPUT_DIR, \"nll_distribution_1_\" + str(timestamp) + \".png\")\n    plt.savefig(plot_path, dpi=300)\n    print(\"NLL distribution plot saved to \" + plot_path)\n```",
+    "timestamp": "2026-04-06 16:37:42",
+    "cost": {
+      "Agent": [
+        "engineer_response_evaluator"
+      ],
+      "Model": [
+        "gemini-3.1-flash-lite-preview"
+      ],
+      "Cost": [
+        0.0077220000000000006
+      ],
+      "Prompt Tokens": [
+        8910
+      ],
+      "Completion Tokens": [
+        3663
+      ],
+      "Total Tokens": [
+        12573
+      ]
+    }
+  },
+  {
+    "name": "executor",
+    "content": "Execution results:\n\nExecution output: \nLoading features and labels...\nTrain samples: 61440\nValidation InD samples: 16128\nUsing device: cuda\nInitializing NSF for LOCO validation...\nTraining NSF on 80 cosmologies...\nEpoch 1/30 - Train Loss: 332.0789\nEpoch 5/30 - Train Loss: 228.2304\nEpoch 10/30 - Train Loss: 203.0299\nEpoch 15/30 - Train Loss: 192.1002\nEpoch 20/30 - Train Loss: 185.7322\nEpoch 25/30 - Train Loss: 181.1614\nEpoch 30/30 - Train Loss: 178.5292\nTraining completed in 116.48 seconds.\nGenerating synthetic OoD proxies (Gaussian smoothing) for validation set...\nValidation OoD samples: 16128\nComputing NLL scores...\nInD NLL - Mean: 186.1714, Std: 22.1826\nInD NLL - Min: 110.6808, Max: 455.8648\nOoD NLL - Mean: 116358.68, Std: 4056.7\nOoD NLL - Min: 101238.47, Max: 127118.3\nValidation Partial AUC (FPR 0.001-0.05): 1.0\nNLL distribution plot saved to data/nll_distribution_1_1775493673.png\n",
+    "timestamp": "2026-04-06 16:41:14",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "execution_recorder",
+    "content": "Code execution recorded.\n\nExecution output:\nExecution results:\n\nExecution output: \nLoading features and labels...\nTrain samples: 61440\nValidation InD samples: 16128\nUsing device: cuda\nInitializing NSF for LOCO validation...\nTraining NSF on 80 cosmologies...\nEpoch 1/30 - Train Loss: 332.0789\nEpoch 5/30 - Train Loss: 228.2304\nEpoch 10/30 - Train Loss: 203.0299\nEpoch 15/30 - Train Loss: 192.1002\nEpoch 20/30 - Train Loss: 185.7322\nEpoch 25/30 - Train Loss: 181.1614\nEpoch 30/30 - Train Loss: 178.5292\nTraining completed in 116.48 seconds.\nGenerating synthetic OoD proxies (Gaussian smoothing) for validation set...\nValidation OoD samples: 16128\nComputing NLL scores...\nInD NLL - Mean: 186.1714, Std: 22.1826\nInD NLL - Min: 110.6808, Max: 455.8648\nOoD NLL - Mean: 116358.68, Std: 4056.7\nOoD NLL - Min: 101238.47, Max: 127118.3\nValidation Partial AUC (FPR 0.001-0.05): 1.0\nNLL distribution plot saved to data/nll_distribution_1_1775493673.png\n",
+    "timestamp": "2026-04-06 16:41:14",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "executor_response_evaluator",
+    "content": "",
+    "timestamp": "2026-04-06 16:41:15",
+    "cost": {
+      "Agent": [
+        "executor_response_evaluator"
+      ],
+      "Model": [
+        "gemini-3.1-flash-lite-preview"
+      ],
+      "Cost": [
+        0.00033175
+      ],
+      "Prompt Tokens": [
+        1147
+      ],
+      "Completion Tokens": [
+        30
+      ],
+      "Total Tokens": [
+        1177
+      ]
+    }
+  },
+  {
+    "name": "_Group_Tool_Executor",
+    "content": "Code execution successful. 1 new image(s) generated.\n\n\nxxxxxxxxxxxxxxxxxxxxxxxxxx\n\nWorkflow status:\n\nPlan step number: 3\n\nAgent for sub-task (might be different from the next agent suggestion for debugging): engineer\n\nStep status (before execution): in progress\n\nCode status: success\n\nxxxxxxxxxxxxxxxxxxxxxxxxxx\n\n\nPlease review the generated images and provide feedback.",
+    "timestamp": "2026-04-06 16:41:15",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "image_reviewer",
+    "content": "[{'type': 'text', 'text': '**Needs Revision:** no\\n\\n**Issues:**\\nNone\\n\\n**Suggestions:**\\nNone\\n\\n**Summary:**\\nThe plot is clear, well-labeled, and correctly shows the requested data. It demonstrates a massive separation in NLL between the InD validation data and the synthetic OoD proxy (Gaussian smoothed maps), indicating that the model is highly sensitive to this specific type of perturbation.', 'extras': {'signature': 'EjQKMgG+Pvb7OUyrqaU+/sRLPCO/ksdDPLwQ85KAyAU3jbseXsbkscaGXBM01UBbIblGUfIs'}}]",
+    "timestamp": "2026-04-06 16:41:18",
+    "cost": {
+      "Agent": [
+        "image_reviewer"
+      ],
+      "Model": [
+        "gemini-3.1-flash-image-preview"
+      ],
+      "Cost": [
+        0.000356475
+      ],
+      "Prompt Tokens": [
+        4445
+      ],
+      "Completion Tokens": [
+        77
+      ],
+      "Total Tokens": [
+        4522
+      ]
+    }
+  },
+  {
+    "name": "image_review_recorder",
+    "content": "",
+    "timestamp": "2026-04-06 16:41:19",
+    "cost": {
+      "Agent": [
+        "image_review_recorder"
+      ],
+      "Model": [
+        "gemini-3.1-flash-lite-preview"
+      ],
+      "Cost": [
+        0.0002505
+      ],
+      "Prompt Tokens": [
+        498
+      ],
+      "Completion Tokens": [
+        84
+      ],
+      "Total Tokens": [
+        582
+      ]
+    }
+  },
+  {
+    "name": "_Group_Tool_Executor",
+    "content": "Image review passed. Step marked as complete.\n\nSummary: The plot is clear, well-labeled, and correctly shows the requested data. It demonstrates a massive separation in NLL between the InD validation data and the synthetic OoD proxy (Gaussian smoothed maps), indicating that the model is highly sensitive to this specific type of perturbation.",
+    "timestamp": "2026-04-06 16:41:19",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "controller",
+    "content": "",
+    "timestamp": "2026-04-06 16:41:21",
+    "cost": {
+      "Agent": [
+        "controller"
+      ],
+      "Model": [
+        "gemini-3.1-flash-lite-preview"
+      ],
+      "Cost": [
+        0.00253625
+      ],
+      "Prompt Tokens": [
+        9365
+      ],
+      "Completion Tokens": [
+        130
+      ],
+      "Total Tokens": [
+        9495
+      ]
+    }
+  },
+  {
+    "name": "_Group_Tool_Executor",
+    "content": "\n**Step number:** 4 out of 5.\n\n**Sub-task:** Perform inference and generate the final submission.\n\n**Agent in charge of sub-task:** `engineer`\n\n**Instructions:**\n\n- Load test maps and pre-trained NSF ensemble (3 models).\n- Compute WST features for test maps.\n- Calculate NLL scores averaged over a 5-sample grid of parameter marginals.\n- Compute uncertainty estimates (errorbars) from the ensemble.\n- Generate and save submission.zip.\n\n**Step status:** in progress \u23f3\n\n**Code status:** None\n\n**Step iteration:** 3/10\n        ",
+    "timestamp": "2026-04-06 16:41:21",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  },
+  {
+    "name": "terminator",
+    "content": "TERMINATE",
+    "timestamp": "2026-04-06 16:41:21",
+    "cost": {
+      "Agent": [],
+      "Model": [],
+      "Cost": [],
+      "Prompt Tokens": [],
+      "Completion Tokens": [],
+      "Total Tokens": []
+    }
+  }
+]
